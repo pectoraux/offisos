@@ -1,0 +1,78 @@
+{
+  "id": "COMPAT-CAD-004",
+  "title": "Parametric constraints, associative drafting, and advanced 2D editing",
+  "issue": 65,
+  "architecture_version": "1.1",
+  "requirements": ["CAD-001", "CAD-002", "BIM-002"],
+  "dependencies": ["COMPAT-BIM-003", "RESEARCH-CAD-007", "COMPAT-CAD-003", "COMPAT-IFC-001"],
+  "objective": "Complete the next bounded professional-CAD editing layer with deterministic, engine-independent constraints, associative drafting, reusable 2D symbols/blocks, and deterministic mirror/array/pattern operations while preserving the frozen CADDocument/App API/Construction Graph architecture.",
+  "acceptance_criteria": [
+    "A representative constrained 2D drawing can be created and deterministically solved through the shared App API.",
+    "Constraint edits propagate to dependent geometry and associative dimensions/annotations without breaking canonical identities.",
+    "Unsatisfied, over-constrained, ambiguous, and unsupported cases fail explicitly and reproducibly.",
+    "Block/symbol definitions can produce multiple instances with stable definition/instance relationships.",
+    "Mirror/array operations produce deterministic identities and remain replayable.",
+    "Save/open preserves constraints, symbols, associations, and revision lineage.",
+    "Web and Electron produce equivalent semantic results through their real transports.",
+    "Existing 2D drafting, BIM, IFC, documentation, real-engine, and governance suites remain green.",
+    "No direct OCCT/FreeCAD/IfcOpenShell imports are introduced into renderer/CADDocument/App API.",
+    "No protected architecture files are modified."
+  ],
+  "non_goals": [
+    "Full AutoCAD/Archicad/Revit constraint-system parity.",
+    "A general-purpose nonlinear constraint solver.",
+    "Advanced 3D parametric assemblies or MEP/structural constraints.",
+    "Production DWG/PDF writer implementation.",
+    "Project/scheduling work.",
+    "Architecture changes.",
+    "Approval or verification claim by implementation."
+  ],
+  "risk_assumptions": [
+    "Issue #65 is authoritative for scope; the implementation is additive under frozen Architecture v1.1.",
+    "There is no dedicated constraints requirement ID in the frozen requirements registry; the slice is mapped to CAD-001/CAD-002/BIM-002 and the issue is authoritative.",
+    "The constraint solver is intentionally bounded and deterministic. Unsupported relationships decline explicitly rather than being approximated.",
+    "Construction Graph identity remains canonical-element keyed; constraints and associations never promote engine-native IDs to identity.",
+    "Reusable block definitions follow the canonical definition/instance identity pattern established by COMPAT-BIM-003.",
+    "AutoCAD/Archicad parity is a later product program and is not claimed by this work item."
+  ],
+  "evidence": [],
+  "decisions": [],
+  "transitions": [
+    {
+      "from": "DRAFT",
+      "to": "READY",
+      "at": "2026-08-27T18:30:00Z",
+      "actor": "pectoraux",
+      "role": "architect",
+      "reason": "Issue #65 defines the next bounded CAD editing layer after the verified BIM foundation.",
+      "references": {"issue": 65}
+    },
+    {
+      "from": "READY",
+      "to": "ASSIGNED",
+      "at": "2026-08-27T18:31:00Z",
+      "actor": "pectoraux",
+      "role": "architect",
+      "reason": "COMPAT-BIM-003 is formally VERIFIED on main; the dependency gate is clear and execution is released.",
+      "references": {"issue": 65, "assignee": "z-ai-implementation-agent"}
+    },
+    {
+      "from": "ASSIGNED",
+      "to": "IMPLEMENTING",
+      "at": "2026-08-27T18:32:00Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "Implementation begins from main 161d0284 with all declared foundations verified.",
+      "references": {"issue": 65}
+    }
+  ],
+  "state": "IMPLEMENTING",
+  "evidence_requirements": [
+    "Deterministic constraint tests covering supported geometric and dimensional relationships plus explicit failure classifications.",
+    "Associative annotation/dimension recomputation evidence keyed by canonical element identities.",
+    "Block/symbol definition-instance and mirror/array/pattern determinism evidence.",
+    "Immutable revision, replay, undo/redo and save/open preservation evidence.",
+    "Web/Electron parity through their real transports.",
+    "All existing CAD/BIM/IFC/documentation and governance regression suites remain green."
+  ]
+}
