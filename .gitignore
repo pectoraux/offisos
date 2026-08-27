@@ -2,3 +2,5 @@ node_modules/
 governance-report.json
 *.log
 .DS_Store
+.vercel
+.env*

@@ -24,3 +24,11 @@ npm run governance -- check-protected --base main
 ```
 
 Node.js ≥ 20 is required.
+
+## Web host preview deployments (Vercel)
+
+- **Repository:** `pectoraux/offisos` — **web root:** `apps/web` (Next.js 16 host; the canonical `@offisos/cad-app-shell` contracts resolve from `../../app/src/*` through the `apps/web/tsconfig.json` path alias — never duplicated or forked).
+- **Vercel project:** `offisos` — framework Next.js, **Root Directory `apps/web`**, "Include files outside the Root Directory" enabled (required for the monorepo `app/src` imports). Vercel detects `apps/web/bun.lock` and installs with Bun, then runs the repo's own build (`next build --webpack`, including the `extensionAlias` mapping for the canonical `.js`→`.ts` ESM specifiers).
+- **Preview vs production:** preview deployments are per-deployment URLs (one per deployment of a branch/PR) and never touch the production alias; production deployments happen only from the production branch (`main`) via the Git integration or an explicit `--prod` deploy. The engine-free CAD/BIM demo (drafting, BIM authoring, components/materials, `/api/cad`) runs with no external secrets; the OCCT/IFC Python engine workers are unavailable on serverless and the app stays on engine-free paths there.
+- **Deploying a preview from a local checkout** (same source of truth, no repo changes): `vercel link --project offisos` at the repository root, then `vercel deploy --token "$VERCEL_TOKEN"` (the token is used ephemerally and must never be committed; `.vercel/` and `.env*` are gitignored).
+- **Git integration for automatic PR previews** requires the Vercel GitHub App to be granted access to `pectoraux/offisos` (GitHub → Settings → Applications → Vercel, or <https://github.com/apps/vercel/installations/new>); once granted, every PR/branch automatically produces a Preview Deployment for `apps/web`.
