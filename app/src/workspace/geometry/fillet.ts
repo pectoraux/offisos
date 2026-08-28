@@ -166,38 +166,78 @@ function arcBetween(tA: Pt, tB: Pt, C: Pt, ref: Pt): ArcGeom {
 export function filletPolyline(pl: PolylineGeom, r: number): { pieces: PolylineGeom[]; arcs: ArcGeom[] } {
   const pieces: PolylineGeom[] = [];
   const arcs: ArcGeom[] = [];
-  let current: Pt[] = [];
   const verts = pl.vertices;
   const n = verts.length;
+
+  // Pass 1: resolve every (interior) corner; record its tangent points.
+  // A closed polyline fillets EVERY vertex (the chain wraps); an open one
+  // keeps its first/last vertices (AutoCAD-class semantics).
+  interface Corner {
+    readonly tA: Pt;
+    readonly tB: Pt;
+  }
+  const cornerAt: (Corner | null)[] = new Array<Corner | null>(n).fill(null);
   for (let i = 0; i < n; i++) {
+    const interior = pl.closed ? true : i > 0 && i < n - 1;
+    if (!interior) continue;
     const vPrev = verts[(i - 1 + n) % n]!;
     const v = verts[i]!;
     const vNext = verts[(i + 1) % n]!;
-    const isFirst = i === 0 && !pl.closed;
-    const isLast = i === n - 1 && !pl.closed;
-    if (isFirst || isLast) {
-      current.push(v);
-      continue;
-    }
     const segA: LineGeom = { type: "line", x1: vPrev.x, y1: vPrev.y, x2: v.x, y2: v.y };
     const segB: LineGeom = { type: "line", x1: v.x, y1: v.y, x2: vNext.x, y2: vNext.y };
     try {
       const res = filletLineLine(segA, segB, vPrev, vNext, r);
       if (res.arc !== null && res.a !== null && res.b !== null) {
-        const tA = { x: (res.a as LineGeom).x2, y: (res.a as LineGeom).y2 };
-        const tB = { x: (res.b as LineGeom).x2, y: (res.b as LineGeom).y2 };
-        current.push(tA);
-        if (current.length >= 2) {
-          pieces.push({ type: "polyline", vertices: [...current], closed: false });
-        }
-        current = [];
+        cornerAt[i] = {
+          tA: { x: (res.a as LineGeom).x2, y: (res.a as LineGeom).y2 },
+          tB: { x: (res.b as LineGeom).x2, y: (res.b as LineGeom).y2 },
+        };
         arcs.push(res.arc);
-        current.push(tB);
-        continue;
       }
-      current.push(v);
     } catch {
-      current.push(v);
+      // Radius does not fit this corner — the vertex stays sharp.
+    }
+  }
+
+  const firstCorner = cornerAt.findIndex((c) => c !== null);
+  if (firstCorner === -1) {
+    // No corner accepted the radius — the polyline is returned unchanged.
+    return { pieces: [pl], arcs };
+  }
+
+  // Pass 2: emit the straight pieces between consecutive corners. For a
+  // CLOSED polyline the walk wraps back to the first corner's tangent A —
+  // the wrap-around piece (e.g. a rectangle's left edge) is emitted like
+  // every other piece (regression: it used to be dropped).
+  if (pl.closed) {
+    let current: Pt[] = [cornerAt[firstCorner]!.tB];
+    for (let k = 1; k < n; k++) {
+      const i = (firstCorner + k) % n;
+      const corner = cornerAt[i]!;
+      if (corner !== null) {
+        current.push(corner.tA);
+        pieces.push({ type: "polyline", vertices: current, closed: false });
+        current = [corner.tB];
+      } else {
+        current.push(verts[i]!);
+      }
+    }
+    current.push(cornerAt[firstCorner]!.tA);
+    pieces.push({ type: "polyline", vertices: current, closed: false });
+    return { pieces, arcs };
+  }
+
+  let current: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const corner = cornerAt[i]!;
+    if (corner !== null) {
+      current.push(corner.tA);
+      if (current.length >= 2) {
+        pieces.push({ type: "polyline", vertices: current, closed: false });
+      }
+      current = [corner.tB];
+    } else {
+      current.push(verts[i]!);
     }
   }
   if (current.length >= 2) pieces.push({ type: "polyline", vertices: current, closed: false });

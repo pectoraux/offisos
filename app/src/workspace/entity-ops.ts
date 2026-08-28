@@ -79,17 +79,35 @@ export interface EntityOpOutcome {
 function outcome(
   edits: readonly DocumentEdit[],
   summary: string,
-  counts: { created?: number; modified?: number; removed?: number } = {},
+  counts?: { created?: number; modified?: number; removed?: number },
 ): EntityOpOutcome {
   if (edits.length === 0) {
     return { edit: null, summary, createdCount: 0, modifiedCount: 0, removedCount: 0 };
   }
+  // Counts default to the edit-derived truth (create/modify/remove per
+  // sub-edit) so every operation reports accurately.
+  let created = counts?.created;
+  let modified = counts?.modified;
+  let removed = counts?.removed;
+  if (created === undefined || modified === undefined || removed === undefined) {
+    let dc = 0;
+    let dm = 0;
+    let dr = 0;
+    for (const e of edits) {
+      if (e.type === "addElement") dc++;
+      else if (e.type === "removeElement") dr++;
+      else if (e.type === "updateElement") dm++;
+    }
+    created = created ?? dc;
+    modified = modified ?? dm;
+    removed = removed ?? dr;
+  }
   return {
     edit: { type: "applyEdits", edits: [...edits] },
     summary,
-    createdCount: counts.created ?? 0,
-    modifiedCount: counts.modified ?? 0,
-    removedCount: counts.removed ?? 0,
+    createdCount: created,
+    modifiedCount: modified,
+    removedCount: removed,
   };
 }
 

@@ -475,6 +475,19 @@ export function applyPromptEvent(
         return { state, output: activeOutput(state, ["This option requires a value — type one or press Esc to cancel the option."]) };
       }
 
+      // CAD-PARITY-003: optional multiple ENTITY-POINT step (TRIM/EXTEND
+      // targets) finishes on Enter — checked BEFORE the generic multiple
+      // branch so the entityPoints collection is not misread as points.
+      if (step.optional === true && step.multiple === true && step.kind === "entityPoint") {
+        const existing = state.values[step.id];
+        const picks = existing !== undefined && existing.kind === "entityPoints" ? existing.picks : [];
+        const min = step.minInputs ?? 1;
+        if (picks.length < min) {
+          return { state, output: activeOutput(state, [`Need at least ${min} object pick(s) — ${picks.length} collected.`]) };
+        }
+        return completeCommand(state, cmd, [], ctx);
+      }
+
       // Option-free Enter on an optional multiple step: finish collection.
       if (step.optional === true && (step.multiple === true || step.kind === "entity")) {
         if (step.kind === "entity") {
@@ -508,17 +521,6 @@ export function applyPromptEvent(
         const min = step.minInputs ?? 1;
         if (points.length < min) {
           return { state, output: activeOutput(state, [`Need at least ${min} more point(s) — press Esc to cancel.`]) };
-        }
-        return completeCommand(state, cmd, [], ctx);
-      }
-
-      // Optional multiple ENTITY-POINT step (TRIM/EXTEND targets): finish.
-      if (step.optional === true && step.multiple === true && step.kind === "entityPoint") {
-        const existing = state.values[step.id];
-        const picks = existing !== undefined && existing.kind === "entityPoints" ? existing.picks : [];
-        const min = step.minInputs ?? 1;
-        if (picks.length < min) {
-          return { state, output: activeOutput(state, [`Need at least ${min} object pick(s) — ${picks.length} collected.`]) };
         }
         return completeCommand(state, cmd, [], ctx);
       }
