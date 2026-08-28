@@ -152,13 +152,14 @@ function addGeomEdit(geom: Geom, layer: string): DocumentEdit {
   };
 }
 
-/** updateElement replacing an entity's geometry with the canonical form
- *  (layer and element identity preserved; rectangle sources materialize as
- *  the closed polyline they mathematically are — never silent). */
+/** setProps replacing an entity's props with the canonical form (FULL
+ *  replacement — stale legacy fields are dropped, not merged; layer and
+ *  element identity preserved; rectangle sources materialize as the closed
+ *  polyline they mathematically are — never silent). */
 function replaceGeomEdit(view: EntityView, geom: Geom): DocumentEdit {
   const layer = layerOfElement(view.element);
   const props: Record<string, unknown> = { drafting: true, layer, ...(geom as unknown as Record<string, unknown>) };
-  return { type: "updateElement", elementId: view.element.id, patch: props };
+  return { type: "setProps", elementId: view.element.id, patch: props };
 }
 
 function removeEdit(id: string): DocumentEdit {

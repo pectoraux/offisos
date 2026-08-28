@@ -101,6 +101,10 @@ export interface PromptStep {
   readonly multiple?: boolean;
   /** Minimum number of inputs for a multiple step (checked on Enter). */
   readonly minInputs?: number;
+  /** CAD-PARITY-003: Enter with NO picks (and no preselection) completes the
+   *  step with an EMPTY value — TRIM/EXTEND "or <all objects>" semantics
+   *  (the implied-all-edges mode is resolved server-side). */
+  readonly emptyEnterCompletes?: boolean;
   /** Option keywords valid while this step is active. */
   readonly options?: readonly PromptStepOption[];
   /** Entity-step pick validator: returns a rejection message or null. */

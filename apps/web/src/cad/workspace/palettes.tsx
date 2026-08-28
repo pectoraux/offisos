@@ -21,6 +21,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import type { CADDocumentSnapshot, Element, LayerRecord } from "@offisos/cad-app-shell/contracts/caddocument";
 import type { CommandQueryResponse } from "@offisos/cad-app-shell/contracts/app-api";
+import { geomFromElement } from "@offisos/cad-app-shell/workspace/geometry/bridge";
+import { GEOM_LABEL } from "@offisos/cad-app-shell/workspace/geometry/types";
 import { draftingAddLayer, draftingUpdateLayer, setSelection } from "@/cad/client/http-transport";
 
 export type DockTab = "properties" | "layers" | "navigator";
@@ -109,11 +111,16 @@ function PropertiesPanel(props: PalettesProps): React.JSX.Element {
       const { bimSetProperties } = await import("@/cad/client/http-transport");
       return bimSetProperties(el.id, patch);
     });
+  // CAD-PARITY-003: the canonical geometry view of the selection (both
+  // storage conventions decode through the bridge — dims/BIM return null).
+  const canonicalGeom = el.kind === "geometry" && p.drafting === true ? geomFromElement(el) : null;
 
   const rows: React.JSX.Element[] = [];
   rows.push(<PropRow key="id" label="id"><code className="font-mono text-[11px]">{el.id}</code></PropRow>);
   rows.push(<PropRow key="kind" label="kind"><Badge variant="secondary">{el.kind}</Badge></PropRow>);
-  if (typeof p.type === "string") {
+  if (canonicalGeom !== null) {
+    rows.push(<PropRow key="type" label="type"><Badge variant="secondary">{GEOM_LABEL[canonicalGeom.type]}</Badge></PropRow>);
+  } else if (typeof p.type === "string") {
     rows.push(<PropRow key="type" label="type"><code className="font-mono text-[11px]">{p.type}</code></PropRow>);
   }
   if (typeof p.layer === "string") {
@@ -214,6 +221,72 @@ function PropertiesPanel(props: PalettesProps): React.JSX.Element {
     }
     if (p.type === "polyline" && Array.isArray(p.points)) {
       rows.push(<PropRow key="pts" label="vertices"><span>{(p.points as unknown[]).length}</span></PropRow>);
+    }
+  }
+
+  // CAD-PARITY-003 canonical entities: read-only key geometry display in the
+  // same style as the legacy rows (the new vocabulary + flat-convention
+  // records of the classic types).
+  if (canonicalGeom !== null) {
+    const g = canonicalGeom;
+    const num = (v: number): string => String(Number(v.toFixed(3)));
+    const value = (text: string): React.JSX.Element => <code className="font-mono text-[11px]">{text}</code>;
+    switch (g.type) {
+      case "ellipse":
+        rows.push(<PropRow key="axes" label="axes">{value(`${num(g.rx)} × ${num(g.ry)}`)}</PropRow>);
+        rows.push(<PropRow key="rotation" label="rotation">{value(`${num((g.rotation * 180) / Math.PI)}°`)}</PropRow>);
+        rows.push(<PropRow key="center" label="center">{value(`${num(g.cx)}, ${num(g.cy)}`)}</PropRow>);
+        break;
+      case "spline":
+        rows.push(<PropRow key="cpts" label="control points">{value(String(g.controlPoints.length))}</PropRow>);
+        rows.push(<PropRow key="degree" label="degree">{value(String(g.degree))}</PropRow>);
+        break;
+      case "point":
+        rows.push(<PropRow key="position" label="position">{value(`${num(g.x)}, ${num(g.y)}`)}</PropRow>);
+        break;
+      case "ray":
+      case "xline": {
+        const dirDeg = (((Math.atan2(g.y2 - g.y1, g.x2 - g.x1) * 180) / Math.PI + 360) % 360);
+        rows.push(<PropRow key="base" label="base">{value(`${num(g.x1)}, ${num(g.y1)}`)}</PropRow>);
+        rows.push(<PropRow key="through" label="through">{value(`${num(g.x2)}, ${num(g.y2)}`)}</PropRow>);
+        rows.push(<PropRow key="direction" label="direction">{value(`${num(dirDeg)}°`)}</PropRow>);
+        break;
+      }
+      case "region":
+        rows.push(<PropRow key="boundary" label="boundary">{value(g.boundary.kind)}</PropRow>);
+        rows.push(<PropRow key="area" label="area">{value(num(g.area))}</PropRow>);
+        rows.push(<PropRow key="perimeter" label="perimeter">{value(num(g.perimeter))}</PropRow>);
+        rows.push(<PropRow key="centroid" label="centroid">{value(`${num(g.centroid.x)}, ${num(g.centroid.y)}`)}</PropRow>);
+        break;
+      case "line":
+        if (!Array.isArray(p.from)) {
+          rows.push(<PropRow key="from" label="from">{value(`${num(g.x1)}, ${num(g.y1)}`)}</PropRow>);
+          rows.push(<PropRow key="to" label="to">{value(`${num(g.x2)}, ${num(g.y2)}`)}</PropRow>);
+        }
+        break;
+      case "circle":
+        if (!Array.isArray(p.center)) {
+          rows.push(<PropRow key="center" label="center">{value(`${num(g.cx)}, ${num(g.cy)}`)}</PropRow>);
+          rows.push(<PropRow key="radius" label="radius">{value(num(g.r))}</PropRow>);
+        }
+        break;
+      case "arc":
+        if (!Array.isArray(p.center)) {
+          rows.push(<PropRow key="center" label="center">{value(`${num(g.cx)}, ${num(g.cy)}`)}</PropRow>);
+          rows.push(<PropRow key="radius" label="radius">{value(num(g.r))}</PropRow>);
+          rows.push(
+            <PropRow key="sweep" label="sweep">
+              {value(`${num((((g.endAngle - g.startAngle) * 180) / Math.PI + 360) % 360)}°`)}
+            </PropRow>,
+          );
+        }
+        break;
+      case "polyline":
+        if (!Array.isArray(p.points)) {
+          rows.push(<PropRow key="pts" label="vertices">{value(String(g.vertices.length))}</PropRow>);
+          rows.push(<PropRow key="closed" label="closed">{value(g.closed ? "yes" : "no")}</PropRow>);
+        }
+        break;
     }
   }
 

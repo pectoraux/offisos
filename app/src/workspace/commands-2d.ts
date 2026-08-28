@@ -568,6 +568,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
         optional: true,
         multiple: true,
         minInputs: 1,
+        emptyEnterCompletes: true,
         validate: validate2dPick,
       },
       {
@@ -616,6 +617,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
         optional: true,
         multiple: true,
         minInputs: 1,
+        emptyEnterCompletes: true,
         validate: validate2dPick,
       },
       {

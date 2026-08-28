@@ -606,6 +606,7 @@ export function WorkspaceShell(): React.JSX.Element {
                 onCursor={(world) => setCursor(world)}
                 onPickPoint={(world) => dispatchEngine({ type: "pick", point: world })}
                 onPickEntity={(pick) => dispatchEngine({ type: "entity", entity: pick })}
+                onPickEntityPoint={(pick, worldPoint) => dispatchEngine({ type: "entityPoint", entity: pick, point: [worldPoint[0], worldPoint[1]] })}
                 onSelectionChange={onSelectionChange}
                 onGripEdit={(result: GripEditResult) => {
                   setHistoryLines((h) => [...h, ...result.echo]);

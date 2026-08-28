@@ -9,25 +9,43 @@
 
 import * as React from "react";
 import {
+  ArrowRightToLine,
+  ArrowUpRight,
   Box,
   Circle,
+  CircleDot,
   Clipboard,
+  Columns2,
   Compass,
+  Egg,
+  Expand,
   FilePlus2,
   FileSliders,
+  FlipHorizontal2,
   FolderOpen,
   Grid3x3,
   HelpCircle,
   Layers,
+  Link2,
+  Bomb,
   Minus,
   MousePointer2,
+  MoveHorizontal,
   Navigation,
   Package,
   PanelRight,
+  Pentagon,
   PencilRuler,
   Redo2,
+  RotateCw,
   Save,
+  Scaling,
+  Scissors,
+  Slice,
+  Spline,
+  Split,
   Square,
+  Squircle,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -237,6 +255,29 @@ const TAB_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   window: Square,
   dimlinear: Square,
   dimradius: Circle,
+  // CAD-PARITY-003 draw vocabulary.
+  ellipse: Egg,
+  spline: Spline,
+  point: CircleDot,
+  ray: ArrowUpRight,
+  xline: MoveHorizontal,
+  region: Pentagon,
+  // CAD-PARITY-003 modify vocabulary.
+  rotate: RotateCw,
+  scale: Scaling,
+  mirror: FlipHorizontal2,
+  offset: Columns2,
+  trim: Scissors,
+  extend: ArrowRightToLine,
+  stretch: Expand,
+  fillet: Squircle,
+  chamfer: Slice,
+  break: Split,
+  join: Link2,
+  explode: Bomb,
+  move: MousePointer2,
+  copy: Clipboard,
+  erase: Trash2,
 };
 
 export interface RibbonProps {
@@ -421,13 +462,35 @@ export interface ToolPaletteProps {
 export function ToolPalette(props: ToolPaletteProps): React.JSX.Element | null {
   if (!props.visible) return null;
   const groups: readonly { label: string; ids: readonly string[] }[] = [
-    { label: "Draw", ids: ["line", "polyline", "circle", "arc", "rectangle"] },
+    {
+      label: "Draw",
+      ids: ["line", "polyline", "circle", "arc", "rectangle", "ellipse", "spline", "point", "ray", "xline", "region"],
+    },
     { label: "Annotate", ids: ["dimlinear", "dimradius"] },
     { label: "BIM", ids: ["story", "wall", "slab", "door", "window"] },
-    { label: "Modify", ids: ["move", "copy", "erase", "trim", "extend"] },
+    {
+      label: "Modify",
+      ids: [
+        "move",
+        "copy",
+        "rotate",
+        "scale",
+        "mirror",
+        "offset",
+        "trim",
+        "extend",
+        "stretch",
+        "fillet",
+        "chamfer",
+        "break",
+        "join",
+        "explode",
+        "erase",
+      ],
+    },
   ];
   return (
-    <div className="flex w-14 shrink-0 flex-col gap-2 border-r bg-muted/30 py-2" role="toolbar" aria-label="tool palette">
+    <div className="flex w-14 shrink-0 flex-col gap-2 overflow-y-auto border-r bg-muted/30 py-2" role="toolbar" aria-label="tool palette">
       {groups.map((group) => (
         <div key={group.label}>
           <div className="px-1 pb-0.5 text-center text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">

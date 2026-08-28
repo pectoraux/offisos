@@ -140,7 +140,7 @@ test("modifyEntities move: exact canonical write-back for BOTH conventions", () 
   const legacy = modifyEntities(docElements(), { op: "move", ids: ["l2"], dx: 5, dy: 7 });
   const edit = expectOutcome(legacy, 1);
   assert.deepEqual(edit.edits[0], {
-    type: "updateElement",
+    type: "setProps",
     elementId: "l2",
     patch: { drafting: true, layer: "0", type: "line", x1: 5, y1: 7, x2: 5, y2: 107 },
   }, "legacy {from,to} is written back as canonical {x1..y2}");
@@ -217,7 +217,7 @@ test("modifyEntities mirror: eraseSource=false keeps the source (addElement); tr
 
   const erase = modifyEntities(docElements(), { op: "mirror", ids: ["l1"], p1: { x: 0, y: 0 }, p2: { x: 0, y: 10 }, eraseSource: true });
   const eraseEdit = expectOutcome(erase, 1);
-  assert.equal(eraseEdit.edits[0]!.type, "updateElement");
+  assert.equal(eraseEdit.edits[0]!.type, "setProps");
   assert.deepEqual(
     (eraseEdit.edits[0] as { patch: Record<string, unknown> }).patch,
     { drafting: true, layer: "0", type: "line", x1: 0, y1: 0, x2: -100, y2: 0 },
@@ -281,7 +281,7 @@ test("modifyEntities trim: circle cuts the line at the picked piece; implied all
 test("modifyEntities trim: middle pick splits the entity (replace + add)", () => {
   const o = modifyEntities(docElements(), { op: "trim", edges: ["c1"], trims: [{ targetId: "l1", pick: { x: 50, y: 0 } }] });
   const edit = expectOutcome(o, 2);
-  assert.equal(edit.edits[0]!.type, "updateElement");
+  assert.equal(edit.edits[0]!.type, "setProps");
   assert.deepEqual((edit.edits[0] as { patch: Record<string, unknown> }).patch, {
     drafting: true, layer: "0", type: "line", x1: 0, y1: 0, x2: 30, y2: 0,
   });
@@ -344,8 +344,8 @@ test("modifyEntities fillet pair: exact trimmed lines + the corner arc in one ba
     firstId: "l1", firstPick: { x: 50, y: 0 }, secondId: "l2", secondPick: { x: 0, y: 50 },
   });
   const edit = expectOutcome(o, 3);
-  assert.equal(edit.edits[0]!.type, "updateElement");
-  assert.equal(edit.edits[1]!.type, "updateElement");
+  assert.equal(edit.edits[0]!.type, "setProps");
+  assert.equal(edit.edits[1]!.type, "setProps");
   assert.equal(edit.edits[2]!.type, "addElement");
   const a = (edit.edits[0] as { patch: Record<string, unknown> }).patch;
   const b = (edit.edits[1] as { patch: Record<string, unknown> }).patch;

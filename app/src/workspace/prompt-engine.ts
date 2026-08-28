@@ -504,6 +504,18 @@ export function applyPromptEvent(
               const next: PromptEngineState = { ...withSelection, stepIndex: state.stepIndex + 1 };
               return { state: next, output: activeOutput(next, [`${ctx.currentSelection.length} found (current selection).`]) };
             }
+            // CAD-PARITY-003: TRIM/EXTEND "or <all objects>" — Enter with no
+            // picks completes the step empty (the implied-all mode is
+            // resolved by the semantic core).
+            if (step.emptyEnterCompletes === true) {
+              const values = { ...state.values, [step.id]: { kind: "entities", entities: [] } as PromptValue };
+              const withEmpty: PromptEngineState = { ...state, values };
+              const isLast = state.stepIndex === cmd.steps.length - 1;
+              const echo = ["all objects implied."];
+              if (isLast) return completeCommand(withEmpty, cmd, echo, ctx);
+              const next: PromptEngineState = { ...withEmpty, stepIndex: state.stepIndex + 1 };
+              return { state: next, output: activeOutput(next, echo) };
+            }
             return { state, output: activeOutput(state, ["No objects selected — pick objects first."]) };
           }
           const min = step.minInputs ?? 1;
