@@ -42,7 +42,7 @@
     "Green cad-parity-003 CI workflow on the implementation head: app suite with LOCK-018 covering the extended src/workspace core, Web host lint/typecheck/build + the workspace workflow smoke against the pinned parity fixture, Electron build + all ten smokes incl. the 19-step real-UI workspace smoke.",
     "Browser-verified golden paths on the dev server (the same build surface CI validates): ELLIPSE via the command line with exact axes, TRIM implied-all-edges with an entityPoint pick and exact trimmed geometry, ROTATE 45\u00b0 typed with the exact endpoint, OFFSET exact \u2014 with zero console errors."
   ],
-  "state": "IMPLEMENTING",
+  "state": "PR_OPEN",
   "transitions": [
     {
       "from": "DRAFT",
@@ -76,6 +76,18 @@
       "reason": "Implementation started on the assigned branch work/cad-parity-003-2d-editing (dependency satisfied on main per Issue #78: CAD-PARITY-002 merged at d87559c).",
       "references": {
         "issue": 78
+      }
+    },
+    {
+      "from": "IMPLEMENTING",
+      "to": "PR_OPEN",
+      "at": "2026-08-28T15:59:09Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "Evidence package complete and PR #79 opened; the shared core, both host extensions, the 175-test deterministic suite, the cad-parity-003 CI workflow and this record are on the branch; the local gauntlet (584-test app suite, both host typechecks/builds/lints, the web parity smoke with the pinned fixture and the 19-step Electron workspace smoke) is green; implementation stopped at PR_OPEN as directed \u2014 CI evidence (EV-003) lands on the PR head.",
+      "references": {
+        "issue": 78,
+        "pr": 79
       }
     }
   ],
