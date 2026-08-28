@@ -721,13 +721,27 @@ export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
     name: "COPY",
     aliases: ["CO", "CP"],
     label: "Copy",
-    description: "Copy selected objects by a displacement.",
+    description:
+      "Copy selected objects by a displacement (single placement per run — the Multiple repeat mode is a typed decline in this build).",
     category: "modify",
     ribbonTab: "Home",
     steps: [
       UNDO_STEP,
       { id: "base", kind: "point", prompt: "Specify base point:" },
-      { id: "target", kind: "displacement", prompt: "Specify second point or <use typed displacement>:", baseStep: "base" },
+      {
+        id: "target",
+        kind: "displacement",
+        prompt: "Specify second point or <use typed displacement>:",
+        baseStep: "base",
+        options: [
+          {
+            keyword: "M",
+            label: "Multiple placement (unsupported in this build)",
+            unsupported:
+              "COPY multiple placement (repeat) is not supported in this build — one copy per run; run COPY again for the next placement.",
+          },
+        ],
+      },
     ],
     build: (values) => {
       const objects = entitiesValue(values, "objects");

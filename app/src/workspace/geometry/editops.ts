@@ -179,20 +179,31 @@ export function extendGeom(
       const e = arcEnd(target);
       const sweep = arcSweep(target);
       const extendFromEnd = dist(pick, e) < dist(pick, s);
-      // Walk CCW (or CW if extending backwards is impossible — arcs are CCW
-      // by definition, so extension always goes CCW from one end).
-      const startAngle = extendFromEnd ? target.endAngle : target.startAngle;
-      const dirSign = 1; // CCW extension
-      void dirSign;
+      // Directed interval semantics (Architect review): arcs run CCW from
+      // start to end. Extending the END moves it CCW beyond the current end;
+      // extending the START moves it BACKWARDS (CW). In both directions the
+      // new end angle must land in the complementary arc (the gap between
+      // the end and the start) — a boundary crossing INSIDE the current
+      // sweep is never a valid extension target (it would shorten or
+      // misorient the arc). The swept interval only ever GROWS and stays
+      // strictly below TAU.
+      const maxExtension = TAU - sweep - 1e-9;
+      if (maxExtension <= 1e-9) {
+        throw new GeomOpError("the arc already sweeps the full circle — nothing to extend", "no_boundary");
+      }
       let bestAngle: number | null = null;
       let bestDelta = Infinity;
       for (const bnd of boundaries) {
         const hits = intersectGeoms({ type: "circle", cx: c.x, cy: c.y, r: target.r }, bnd);
         for (const h of hits) {
           const a = angleAt(c, h);
-          let delta = normAngle(a - startAngle);
-          if (delta <= 1e-9) delta = 0; // touching
-          if (delta > 1e-9 && delta < bestDelta) {
+          // End-side: CCW distance from the current end to the hit.
+          // Start-side: CW distance from the current start to the hit
+          // (= the CCW distance from the hit back to the start).
+          const delta = extendFromEnd
+            ? normAngle(a - target.endAngle)
+            : normAngle(target.startAngle - a);
+          if (delta > 1e-9 && delta <= maxExtension && delta < bestDelta) {
             bestDelta = delta;
             bestAngle = a;
           }
@@ -202,10 +213,13 @@ export function extendGeom(
         throw new GeomOpError("no boundary intersection along the arc's extension", "no_boundary");
       }
       if (extendFromEnd) {
+        // New sweep = sweep + bestDelta (< TAU by the bound above).
         return { ...target, endAngle: normAngle(bestAngle) };
       }
-      // Extending the start backwards = new start angle (negative sweep).
-      return { ...target, startAngle: normAngle(bestAngle), endAngle: normAngle(target.startAngle) + sweep };
+      // The start moves backwards to the hit; the end keeps its angle. The
+      // new sweep normAngle(end - newStart) = sweep + bestDelta — the arc
+      // grows by exactly the picked extension.
+      return { ...target, startAngle: normAngle(bestAngle) };
     }
     case "polyline": {
       const total = lengthOf(target);
@@ -349,9 +363,9 @@ function joinLines(lines: readonly (Geom & { type: "line" })[]): Geom {
   const l = Math.hypot(dir.x, dir.y);
   if (l <= EPS) throw new GeomOpError("degenerate line", "degenerate");
   const u = { x: dir.x / l, y: dir.y / l };
-  let minT = 0;
-  let maxT = l;
-  for (const ln of lines.slice(1)) {
+  const tol = 1e-6 * Math.max(1, l);
+  // Project every line onto the shared direction (collinearity required).
+  const intervals = lines.map((ln) => {
     const p1 = { x: ln.x1, y: ln.y1 };
     const p2 = { x: ln.x2, y: ln.y2 };
     const t1 = (p1.x - a.x) * u.x + (p1.y - a.y) * u.y;
@@ -359,19 +373,34 @@ function joinLines(lines: readonly (Geom & { type: "line" })[]): Geom {
     // Collinearity check: perpendicular distance < tol.
     const perp1 = Math.abs((p1.x - a.x) * u.y - (p1.y - a.y) * u.x);
     const perp2 = Math.abs((p2.x - a.x) * u.y - (p2.y - a.y) * u.x);
-    if (perp1 > 1e-6 * Math.max(1, l) || perp2 > 1e-6 * Math.max(1, l)) {
+    if (perp1 > tol || perp2 > tol) {
       throw new GeomOpError("lines are not collinear", "no_join");
     }
-    minT = Math.min(minT, t1, t2);
-    maxT = Math.max(maxT, t1, t2);
+    return { lo: Math.min(t1, t2), hi: Math.max(t1, t2) };
+  });
+  // The projected intervals must form ONE CONTIGUOUS span: JOIN combines
+  // collinear lines that touch or overlap — it never fabricates the span
+  // between disconnected pieces (Architect review: canonical modify
+  // operations must not invent geometry). A gap is a typed failure.
+  const sorted = [...intervals].sort((x, y) => x.lo - y.lo || x.hi - y.hi);
+  let lo = sorted[0]!.lo;
+  let hi = sorted[0]!.hi;
+  for (const iv of sorted.slice(1)) {
+    if (iv.lo > hi + tol) {
+      throw new GeomOpError(
+        "collinear lines have a gap — JOIN cannot fabricate the missing span (draw the span or move the endpoints together first)",
+        "no_join",
+      );
+    }
+    hi = Math.max(hi, iv.hi);
   }
-  if (maxT - minT <= EPS) throw new GeomOpError("degenerate join", "degenerate");
+  if (hi - lo <= EPS) throw new GeomOpError("degenerate join", "degenerate");
   return {
     type: "line",
-    x1: a.x + u.x * minT,
-    y1: a.y + u.y * minT,
-    x2: a.x + u.x * maxT,
-    y2: a.y + u.y * maxT,
+    x1: a.x + u.x * lo,
+    y1: a.y + u.y * lo,
+    x2: a.x + u.x * hi,
+    y2: a.y + u.y * hi,
   };
 }
 
@@ -387,30 +416,36 @@ function joinArcs(arcs: readonly Geom[]): Geom {
       throw new GeomOpError("arcs are not on the same circle", "no_join");
     }
   }
-  // Merge sweeps: collect all angles and find the complementary gap.
-  const angles: number[] = [];
-  for (const a of asArcs) {
-    angles.push(normAngle(a.startAngle), normAngle(a.endAngle));
-  }
-  const sorted = [...new Set(angles.map((a) => Math.round(a * 1e9) / 1e9))].sort((x, y) => x - y);
-  if (sorted.length < 2) throw new GeomOpError("degenerate arc join", "degenerate");
-  // Find the largest gap between consecutive angles; the merged arc is the
-  // complement of that gap.
-  let gapStart = sorted[sorted.length - 1]!;
-  let gapSize = normAngle(sorted[0]! - sorted[sorted.length - 1]!) || TAU;
-  for (let i = 0; i + 1 < sorted.length; i++) {
-    const g = sorted[i + 1]! - sorted[i]!;
-    if (g > gapSize) {
-      gapSize = g;
-      gapStart = sorted[i]!;
+  // Contiguity on the shared circle (same rule as joinLines: JOIN never
+  // fabricates the arc between disconnected pieces). Cut the circle at the
+  // first arc's start (a boundary point, never interior to any interval),
+  // unwrap every arc to [t, t + sweep] with t in [0, TAU), sort by t and
+  // walk: each interval must touch or overlap the accumulated span.
+  const tol = 1e-7;
+  const cut = normAngle(asArcs[0]!.startAngle);
+  const intervals = asArcs
+    .map((a) => {
+      const t = normAngle(normAngle(a.startAngle) - cut);
+      return { t, w: arcSweep(a) };
+    })
+    .sort((x, y) => x.t - y.t);
+  let hi = 0;
+  for (const iv of intervals) {
+    if (iv.t > hi + tol) {
+      throw new GeomOpError(
+        "arcs on the same circle have a gap — JOIN cannot fabricate the missing arc (draw the arc or move the endpoints together first)",
+        "no_join",
+      );
     }
+    hi = Math.max(hi, iv.t + iv.w);
   }
-  const sweep = TAU - gapSize;
-  if (sweep >= TAU - 1e-7) {
+  if (hi >= TAU - 1e-7) {
+    // Contiguous coverage of the full circle.
     return { type: "circle", cx: c.x, cy: c.y, r: first.r };
   }
+  const sweep = hi;
   if (sweep <= 1e-7) throw new GeomOpError("arcs do not overlap or touch", "no_join");
-  const start = normAngle(gapStart + gapSize);
+  const start = cut;
   return { type: "arc", cx: c.x, cy: c.y, r: first.r, startAngle: start, endAngle: normAngle(start + sweep) };
 }
 

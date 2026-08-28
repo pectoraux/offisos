@@ -759,7 +759,17 @@ function opJoin(elements: readonly Element[], ids: readonly string[]): EntityOpO
   if (ids.length < 2) throw new EntityOpError("join needs at least two entities", "bad_input");
   const views = loadEntities(elements, ids);
   const ordered = ids.map((id) => views.get(id)!);
-  const joined = joinGeoms(ordered.map((v) => v.geom));
+  let joined: Geom;
+  try {
+    joined = joinGeoms(ordered.map((v) => v.geom));
+  } catch (err) {
+    // Typed failure at the API surface (Architect review): geometry-level
+    // declines (gap between collinear lines / same-circle arcs, non-
+    // joinable types) surface as join_failed — never the generic
+    // entity_invalid catch-all.
+    if (err instanceof GeomOpError) throw new EntityOpError(err.message, "join_failed");
+    throw err;
+  }
   const edits: DocumentEdit[] = [];
   edits.push(replaceGeomEdit(ordered[0]!, joined));
   for (const v of ordered.slice(1)) {

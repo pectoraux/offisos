@@ -190,10 +190,10 @@ test("entity.modify: trim/extend/fillet/break/join/explode happy paths", async (
   assert.deepEqual(lineCoords(propsOf(await elementById(h, "el-000007"))), { x1: 0, y1: 100, x2: 30, y2: 100 });
   assert.deepEqual(lineCoords(propsOf(await elementById(h, "el-000008"))), { x1: 60, y1: 100, x2: 100, y2: 100 });
 
-  // join: two collinear lines become one; the second source is removed.
+  // join: two collinear TOUCHING lines become one; the second source is removed.
   val(await cmd(h, "entity.create", { entities: [
     { type: "line", layer: "0", x1: 0, y1: 200, x2: 30, y2: 200 },  // el-000009
-    { type: "line", layer: "0", x1: 50, y1: 200, x2: 100, y2: 200 }, // el-000010
+    { type: "line", layer: "0", x1: 30, y1: 200, x2: 100, y2: 200 }, // el-000010
   ] }));
   const joined = val<{ summary: string; removed: number }>(await cmd(h, "entity.modify", { op: "join", ids: ["el-000009", "el-000010"] }));
   assert.equal(joined.summary, "joined into one line");
@@ -201,6 +201,16 @@ test("entity.modify: trim/extend/fillet/break/join/explode happy paths", async (
   const j = propsOf(await elementById(h, "el-000009"));
   assert.deepEqual({ x1: j.x1, y1: j.y1, x2: j.x2, y2: j.y2 }, { x1: 0, y1: 200, x2: 100, y2: 200 });
   assert.equal((await state(h)).elements.some((e) => e.id === "el-000010"), false);
+
+  // join: collinear lines with a GAP are a typed join_failed — the API never
+  // fabricates the missing span (Architect review).
+  const gapPair = val<{ created: string[] }>(await cmd(h, "entity.create", { entities: [
+    { type: "line", layer: "0", x1: 0, y1: 250, x2: 30, y2: 250 },
+    { type: "line", layer: "0", x1: 50, y1: 250, x2: 100, y2: 250 },
+  ] }));
+  const gapRes = await cmd(h, "entity.modify", { op: "join", ids: gapPair.created });
+  assert.equal(errCode(gapRes), "join_failed", "disconnected collinear lines are a typed join_failed");
+  assert.match((gapRes as { message: string }).message, /gap/i, "the failure names the gap");
 
   // explode: a closed canonical polyline becomes its four segments.
   const rectCreate = val<{ created: string[] }>(await cmd(h, "entity.create", { entities: [

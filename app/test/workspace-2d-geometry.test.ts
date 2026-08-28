@@ -32,6 +32,7 @@ import { sampleSpline, bbox, closestOn, lengthOf, areaOf, arcSweep } from "../sr
 import { effectiveDegree } from "../src/workspace/geometry/spline.js";
 import type { Geom, LineGeom, PolylineGeom, CircleGeom, ArcGeom } from "../src/workspace/geometry/types.js";
 import type { Pt } from "../src/workspace/geometry/math2d.js";
+import { TAU } from "../src/workspace/geometry/math2d.js";
 
 // --- Fixtures + assertion helpers -------------------------------------------
 
@@ -457,6 +458,63 @@ test("extendGeom: arc extends CCW to the boundary angle; polyline extends its la
   expectPt(v[1]!, 100, 0, 1e-12);
 });
 
+test("extendGeom ARC end-side directed: the end moves CCW to the nearest boundary; a crossing INSIDE the sweep is never taken", () => {
+  // Arc CCW 0°→45°; boundary crossings at 15° and 30° (both INSIDE the
+  // sweep) and 90° (beyond the end). Picking near the END extends CCW to
+  // 90° (sweep 45°→90°); the inside crossings must not capture it (the
+  // pre-fix defect class: min-delta could land inside and shorten/misorient).
+  const chord = line(10 * Math.cos(Math.PI / 12), 10 * Math.sin(Math.PI / 12), 10 * Math.cos(Math.PI / 6), 10 * Math.sin(Math.PI / 6));
+  const beyond = line(0, 10, 20, 10); // tangent at 90°
+  const a = extendGeom(arc(0, 0, 10, 0, Math.PI / 4), [chord, beyond], { x: 7.07, y: 7.07 });
+  expectArc(a, { x: 0, y: 0 }, 10, 0, Math.PI / 2, 1e-12);
+});
+
+test("extendGeom ARC start-side directed: the start moves BACKWARDS (CW) to the nearest boundary — the sweep grows", () => {
+  // Arc CCW 0°→45°; boundary crossings at 60° and 300°. Picking near the
+  // START extends backwards: the nearest hit in the complementary arc
+  // going CW from the start is 300° (60° CW) → new start 300°, sweep 105°.
+  const back = line(5, -20, 5, 20); // crossings at 60° and 300°
+  const a = extendGeom(arc(0, 0, 10, 0, Math.PI / 4), [back], { x: 10, y: 0 });
+  expectArc(a, { x: 0, y: 0 }, 10, (5 * Math.PI) / 3, (7 * Math.PI) / 12, 1e-12);
+});
+
+test("extendGeom ARC start-side regression: an inside-sweep boundary must NOT capture the start (the arc must not shorten)", () => {
+  // Arc CCW 0°→45°; boundaries: a chord crossing at 15°/30° (INSIDE the
+  // sweep) AND a line crossing at 60°/300°. The start must move to 300°
+  // (sweep grows to 105°) — never to 15° or 30° (the pre-fix defect: the
+  // CCW search from the start picked the inside crossing and the arc
+  // SHRANK to 30° with a misoriented interval).
+  const chord = line(10 * Math.cos(Math.PI / 12), 10 * Math.sin(Math.PI / 12), 10 * Math.cos(Math.PI / 6), 10 * Math.sin(Math.PI / 6));
+  const back = line(5, -20, 5, 20);
+  const a = extendGeom(arc(0, 0, 10, 0, Math.PI / 4), [chord, back], { x: 10, y: 0 });
+  expectArc(a, { x: 0, y: 0 }, 10, (5 * Math.PI) / 3, (7 * Math.PI) / 12, 1e-12);
+});
+
+test("extendGeom ARC: boundaries crossing only INSIDE the sweep are a typed no_boundary (extension never shortens)", () => {
+  // The chord crosses at 15° and 30° — both inside [0°,45°]. Neither end
+  // has a valid extension target: typed failure for BOTH picked ends.
+  const chord = line(10 * Math.cos(Math.PI / 12), 10 * Math.sin(Math.PI / 12), 10 * Math.cos(Math.PI / 6), 10 * Math.sin(Math.PI / 6));
+  expectGeomOpError(
+    () => extendGeom(arc(0, 0, 10, 0, Math.PI / 4), [chord], { x: 10, y: 0 }),
+    "no_boundary",
+    /no boundary intersection along the arc's extension/,
+  );
+  expectGeomOpError(
+    () => extendGeom(arc(0, 0, 10, 0, Math.PI / 4), [chord], { x: 7.07, y: 7.07 }),
+    "no_boundary",
+    /no boundary intersection along the arc's extension/,
+  );
+});
+
+test("extendGeom ARC directed with wrap-around angles: both ends stay exact across the 0° wrap", () => {
+  // Arc CCW 350°→30° (sweep 40°). End-side: boundary tangent at 90° → new
+  // sweep 100°. Start-side: boundary tangent at 270° → new sweep 120°.
+  const endSide = extendGeom(arc(0, 0, 10, (35 * Math.PI) / 18, Math.PI / 6), [line(0, 10, 20, 10)], { x: 8.66, y: 5 });
+  expectArc(endSide, { x: 0, y: 0 }, 10, (35 * Math.PI) / 18, (5 * Math.PI) / 9, 1e-12);
+  const startSide = extendGeom(arc(0, 0, 10, (35 * Math.PI) / 18, Math.PI / 6), [line(0, -10, 20, -10)], { x: 9.85, y: -1.74 });
+  expectArc(startSide, { x: 0, y: 0 }, 10, (3 * Math.PI) / 2, (2 * Math.PI) / 3, 1e-12);
+});
+
 test("extendGeom typed failures: circles and construction entities", () => {
   expectGeomOpError(() => extendGeom(circle(0, 0, 5), [line(10, -5, 10, 5)], { x: 5, y: 0 }), "unsupported", /no ends/);
   expectGeomOpError(
@@ -490,9 +548,36 @@ test("breakGeom: circle removes the CCW interval from p1 to p2", () => {
 // JOIN / EXPLODE / STRETCH
 // ---------------------------------------------------------------------------
 
-test("joinGeoms: collinear lines (even with a gap) become one line", () => {
-  const j = joinGeoms([line(0, 0, 30, 0), line(50, 0, 100, 0)]);
-  expectLine(j, { x: 0, y: 0 }, { x: 100, y: 0 }, 1e-12);
+test("joinGeoms: collinear lines that touch or overlap become one line", () => {
+  const touching = joinGeoms([line(0, 0, 30, 0), line(30, 0, 100, 0)]);
+  expectLine(touching, { x: 0, y: 0 }, { x: 100, y: 0 }, 1e-12);
+  const overlapping = joinGeoms([line(0, 0, 60, 0), line(30, 0, 100, 0)]);
+  expectLine(overlapping, { x: 0, y: 0 }, { x: 100, y: 0 }, 1e-12);
+  // Direction of the individual pieces is irrelevant to the SPAN; the merged
+  // line inherits the FIRST piece's direction (deterministic convention).
+  const reversed = joinGeoms([line(30, 0, 0, 0), line(100, 0, 30, 0)]);
+  expectLine(reversed, { x: 100, y: 0 }, { x: 0, y: 0 }, 1e-12);
+});
+
+test("joinGeoms: collinear lines with a GAP are a typed failure (JOIN must not fabricate geometry)", () => {
+  expectGeomOpError(
+    () => joinGeoms([line(0, 0, 30, 0), line(50, 0, 100, 0)]),
+    "no_join",
+    /gap|fabricate/i,
+  );
+  // Three pieces with a missing middle: same typed failure, and the check
+  // fires on the FIRST gap in projection order (deterministic).
+  expectGeomOpError(
+    () => joinGeoms([line(0, 0, 10, 0), line(40, 0, 50, 0), line(20, 0, 30, 0)]),
+    "no_join",
+    /gap|fabricate/i,
+  );
+  // A gap between pieces given in reverse order is still a gap.
+  expectGeomOpError(
+    () => joinGeoms([line(50, 0, 100, 0), line(0, 0, 30, 0)]),
+    "no_join",
+    /gap|fabricate/i,
+  );
 });
 
 test("joinGeoms: two arcs of the same circle merge their sweeps", () => {
@@ -502,6 +587,30 @@ test("joinGeoms: two arcs of the same circle merge their sweeps", () => {
   assert.ok(Math.abs(a.startAngle) <= 1e-9);
   assert.ok(Math.abs(arcSweep(a) - Math.PI) <= 1e-9);
   assert.equal(a.r, 10);
+});
+
+test("joinGeoms arcs: wrap-around touching merges exactly; overlap keeps the union", () => {
+  // [350°,10°] + [10°,30°] touch across the 0° wrap: merged [350°,30°], sweep 40°.
+  const wrapped = joinGeoms([arc(0, 0, 10, (35 * Math.PI) / 18, Math.PI / 18), arc(0, 0, 10, Math.PI / 18, Math.PI / 6)]);
+  expectArc(wrapped, { x: 0, y: 0 }, 10, (35 * Math.PI) / 18, (2 * Math.PI) / 9, 1e-9);
+  // [0°,90°] fully contains [30°,60°]: the union is [0°,90°].
+  const overlap = joinGeoms([arc(0, 0, 10, 0, Math.PI / 2), arc(0, 0, 10, Math.PI / 6, Math.PI / 3)]);
+  expectArc(overlap, { x: 0, y: 0 }, 10, 0, Math.PI / 2, 1e-9);
+  // Two half arcs touching at both ends cover the circle.
+  const circle = joinGeoms([arc(0, 0, 10, 0, Math.PI), arc(0, 0, 10, Math.PI, TAU)]);
+  assert.equal(circle.type, "circle");
+});
+
+test("joinGeoms arcs: same-circle arcs with a GAP are a typed failure (no fabricated arc)", () => {
+  expectGeomOpError(
+    () => joinGeoms([arc(0, 0, 10, 0, Math.PI / 6), arc(0, 0, 10, Math.PI / 3, Math.PI / 2)]),
+    "no_join",
+    /gap|fabricate/i,
+  );
+  // Two arcs that overlap each other but leave the rest of the circle empty
+  // still merge (union) — only a DISCONNECTED union is rejected.
+  const ok = joinGeoms([arc(0, 0, 10, 0, Math.PI / 2), arc(0, 0, 10, Math.PI / 4, Math.PI)]);
+  expectArc(ok, { x: 0, y: 0 }, 10, 0, Math.PI, 1e-9);
 });
 
 test("joinGeoms: polyline absorbs a connected line (documented: an absorbed arc contributes its endpoints as a chord)", () => {

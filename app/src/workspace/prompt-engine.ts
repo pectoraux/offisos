@@ -386,6 +386,14 @@ function applyOptionKeyword(
     return completeCommand({ ...state, values }, cmd, ["Close."], ctx);
   }
 
+  // CAD-PARITY-003 (Architect review): an option marked `unsupported` answers
+  // with its typed failure and the step re-prompts — the supported/
+  // unsupported surface is explicit in the command line, the command keeps
+  // running (AutoCAD-class invalid-option handling).
+  if (option.unsupported !== undefined) {
+    return { state, output: activeOutput(state, [option.unsupported]) };
+  }
+
   // CAD-PARITY-003 generic mechanism: an option with `input` opens its own
   // sub-prompt (OFFSET's Through, FILLET's Radius, CHAMFER's distances).
   // The collected value is stored under the option key; the flow returns to

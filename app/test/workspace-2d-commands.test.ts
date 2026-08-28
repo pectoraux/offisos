@@ -389,7 +389,10 @@ test("FILLET Radius: R opens the number sub-prompt; 15 flows into the payload; E
       firstId: "a", firstPick: { x: 50, y: 0 }, secondId: "b", secondPick: { x: 0, y: 50 },
     },
   }]);
-  assert.deepEqual(with15.plans[0]!.echo, ["FILLET: radius 15."]);
+  assert.deepEqual(with15.plans[0]!.echo, [
+    "FILLET: radius 15.",
+    "Radius applies to this FILLET run only — persistence across commands is not supported in this build.",
+  ]);
 
   const def = run([
     { event: { type: "typed", text: "FILLET" } },
@@ -400,11 +403,14 @@ test("FILLET Radius: R opens the number sub-prompt; 15 flows into the payload; E
   ]);
   const payload = def.plans[0]!.appApi[0]!.payload as { radius: number };
   assert.equal(payload.radius, 0);
-  assert.deepEqual(def.plans[0]!.echo, ["FILLET: sharp corner (radius 0)."]);
+  assert.deepEqual(def.plans[0]!.echo, [
+    "FILLET: sharp corner (radius 0).",
+    "Radius applies to this FILLET run only — persistence across commands is not supported in this build.",
+  ]);
 });
 
-test("CHAMFER D1/D2 option captures feed the payload", () => {
-  const { plans } = run([
+test("CHAMFER D1/D2 option captures feed the payload (with the per-run persistence note)", () => {
+  const { plans, lines } = run([
     { event: { type: "typed", text: "CHA" } },
     { event: { type: "typed", text: "D1" } },
     { event: { type: "typed", text: "20" } },
@@ -420,6 +426,71 @@ test("CHAMFER D1/D2 option captures feed the payload", () => {
       firstId: "a", firstPick: { x: 50, y: 0 }, secondId: "b", secondPick: { x: 0, y: 50 },
     },
   }]);
+  assert.deepEqual(plans[0]!.echo, [
+    "CHAMFER: distances 20 × 5.",
+    "Distances apply to this CHAMFER run only — persistence across commands is not supported in this build.",
+  ]);
+  assert.ok(lines.includes("Distances apply to this CHAMFER run only — persistence across commands is not supported in this build."));
+});
+
+test("ROTATE: R (Reference) is an explicit typed decline; the command keeps running and a typed angle still completes", () => {
+  const { plans, lines, finalState } = run([
+    { event: { type: "typed", text: "RO" } },
+    { event: { type: "entity", entity: flatLinePick("a") } },
+    { event: { type: "typed", text: "0,0" } },
+    { event: { type: "typed", text: "R" } },
+    { event: { type: "typed", text: "45" } },
+  ]);
+  assert.ok(
+    lines.includes("ROTATE Reference mode is not supported in this build — specify the angle directly (typed degrees or a base→cursor pick)."),
+    "the typed decline is surfaced in the command line",
+  );
+  assert.equal(plans.length, 1, "the command completes after the decline");
+  const payload = plans[0]!.appApi[0]!.payload as { op: string; angle: number };
+  assert.equal(payload.op, "rotate");
+  assert.ok(Math.abs(payload.angle - Math.PI / 4) <= 1e-15);
+  assert.equal(finalState.commandId, null, "back to idle after completion");
+});
+
+test("SCALE: R (Reference) is an explicit typed decline; the factor step re-prompts", () => {
+  const { plans, lines, finalState } = run([
+    { event: { type: "typed", text: "SC" } },
+    { event: { type: "entity", entity: flatLinePick("a") } },
+    { event: { type: "typed", text: "0,0" } },
+    { event: { type: "typed", text: "R" } },
+    { event: { type: "typed", text: "2" } },
+  ]);
+  assert.ok(
+    lines.includes("SCALE Reference mode is not supported in this build — specify the factor directly (typed positive number)."),
+    "the typed decline is surfaced in the command line",
+  );
+  assert.equal(plans.length, 1, "the command completes after the decline");
+  assert.deepEqual(plans[0]!.appApi, [{
+    name: "entity.modify",
+    payload: { op: "scale", ids: ["a"], base: { x: 0, y: 0 }, factor: 2 },
+  }]);
+  assert.equal(finalState.commandId, null, "back to idle after completion");
+});
+
+test("COPY: M (Multiple placement) is an explicit typed decline; the displacement still completes", () => {
+  const { plans, lines, finalState } = run([
+    { event: { type: "typed", text: "CO" } },
+    { event: { type: "entity", entity: flatLinePick("a") } },
+    { event: { type: "typed", text: "0,0" } },
+    { event: { type: "typed", text: "M" } },
+    { event: { type: "typed", text: "10,5" } },
+  ]);
+  assert.ok(
+    lines.includes("COPY multiple placement (repeat) is not supported in this build — one copy per run; run COPY again for the next placement."),
+    "the typed decline is surfaced in the command line",
+  );
+  assert.equal(plans.length, 1, "the command completes after the decline");
+  // flat-convention line → the canonical entity.modify partition.
+  assert.deepEqual(plans[0]!.appApi, [{
+    name: "entity.modify",
+    payload: { op: "copy", ids: ["a"], dx: 10, dy: 5 },
+  }]);
+  assert.equal(finalState.commandId, null, "back to idle after completion");
 });
 
 test("TRIM: Enter-with-preselection at the edges step; entityPoint targets collect; Enter completes the command", () => {

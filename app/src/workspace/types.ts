@@ -84,6 +84,11 @@ export interface PromptStepOption {
   readonly optionPrompt?: string;
   /** Default accepted on Enter for number sub-prompts. */
   readonly defaultValue?: number;
+  /** When set, this option is explicitly UNSUPPORTED in this build: the
+   *  keyword always answers with this typed failure and the step re-prompts
+   *  (the supported/unsupported surface must be explicit in the command
+   *  line — never silent, never a generic parse error). */
+  readonly unsupported?: string;
 }
 
 export interface PromptStep {

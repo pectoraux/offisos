@@ -16,14 +16,18 @@
  * registry drives ribbon, palette, keyboard and command line on BOTH
  * hosts (LOCK-004; no host-specific command implementations).
  *
- * Honest scope notes surfaced in the command descriptions:
+ * Honest scope notes surfaced in the command descriptions and the command
+ * line itself (typed declines — LOCK-007):
  * - TRIM/EXTEND/BREAK exclude ellipse/spline/region targets (the kernel
- *   reports the typed limitation — LOCK-007);
+ *   reports the typed limitation);
  * - OFFSET excludes ellipse/spline;
  * - FILLET/CHAMFER corners are line-pair corners (circle/arc pairs are
  *   typed-declined); SPLINE is control-point based (not fit-point);
- * - ROTATE/SCALE reference modes and COPY/FILLET repeat modes are not in
- *   this release (typed coordinate input covers the geometry exactly).
+ * - ROTATE/SCALE Reference mode (R) and COPY Multiple placement (M) are
+ *   explicit typed declines at their input steps (the command keeps
+ *   running — the supported/unsupported surface is never silent);
+ * - FILLET radius / CHAMFER distances apply per run: the echo states that
+ *   persistence across commands is not supported in this build.
  */
 
 import type { Vec2 } from "../drafting/precision.js";
@@ -404,7 +408,8 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
     name: "ROTATE",
     aliases: ["RO"],
     label: "Rotate",
-    description: "Rotate objects around a base point by a typed angle (degrees, CCW) or a picked base→cursor angle.",
+    description:
+      "Rotate objects around a base point by a typed angle (degrees, CCW) or a picked base→cursor angle. Reference mode (R) is not supported in this build (typed decline).",
     category: "modify",
     ribbonTab: "Home",
     steps: [
@@ -415,6 +420,14 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
         kind: "number",
         prompt: "Specify rotation angle in degrees (CCW), or pick the direction:",
         baseStep: "base",
+        options: [
+          {
+            keyword: "R",
+            label: "Reference (unsupported in this build)",
+            unsupported:
+              "ROTATE Reference mode is not supported in this build — specify the angle directly (typed degrees or a base→cursor pick).",
+          },
+        ],
       },
     ],
     build: (values) => {
@@ -439,13 +452,26 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
     name: "SCALE",
     aliases: ["SC"],
     label: "Scale",
-    description: "Scale objects about a base point by a typed positive factor.",
+    description:
+      "Scale objects about a base point by a typed positive factor. Reference mode (R) is not supported in this build (typed decline).",
     category: "modify",
     ribbonTab: "Home",
     steps: [
       OBJECTS_STEP,
       { id: "base", kind: "point", prompt: "Specify base point:" },
-      { id: "factor", kind: "number", prompt: "Specify scale factor (positive):" },
+      {
+        id: "factor",
+        kind: "number",
+        prompt: "Specify scale factor (positive):",
+        options: [
+          {
+            keyword: "R",
+            label: "Reference (unsupported in this build)",
+            unsupported:
+              "SCALE Reference mode is not supported in this build — specify the factor directly (typed positive number).",
+          },
+        ],
+      },
     ],
     build: (values) => {
       const objects = entitiesValue(values, "objects");
@@ -697,7 +723,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
     aliases: ["F"],
     label: "Fillet",
     description:
-      "Round or join two objects: pick both near the corner (R sets the radius; 0 = sharp corner). Line-pair corners; polyline mode through the entity.modify API.",
+      "Round or join two objects: pick both near the corner (R sets the radius for this run; 0 = sharp corner — persistence across commands is not supported in this build). Line-pair corners; polyline mode through the entity.modify API.",
     category: "modify",
     ribbonTab: "Home",
     steps: [
@@ -725,6 +751,12 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
       const radiusOpt = optionValue(values, "first", "R");
       const radius = radiusOpt !== null && radiusOpt.kind === "number" ? radiusOpt.value : 0;
       if (!(radius >= 0)) throw new Error("FILLET radius must be ≥ 0.");
+      const echo = [radius > 0 ? `FILLET: radius ${trimNum(radius)}.` : "FILLET: sharp corner (radius 0)."];
+      if (radiusOpt !== null) {
+        // Explicit supported/unsupported surface (Architect review): the
+        // radius is per-run — persistence is a stated non-goal, never silent.
+        echo.push("Radius applies to this FILLET run only — persistence across commands is not supported in this build.");
+      }
       return plan(
         [
           {
@@ -740,7 +772,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
             },
           },
         ],
-        [radius > 0 ? `FILLET: radius ${trimNum(radius)}.` : "FILLET: sharp corner (radius 0)."],
+        echo,
       );
     },
   },
@@ -750,7 +782,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
     aliases: ["CHA"],
     label: "Chamfer",
     description:
-      "Bevel or join two objects: pick both near the corner (D1/D2 set the distances). Line-pair corners; polyline mode through the entity.modify API.",
+      "Bevel or join two objects: pick both near the corner (D1/D2 set the distances for this run — persistence across commands is not supported in this build). Line-pair corners; polyline mode through the entity.modify API.",
     category: "modify",
     ribbonTab: "Home",
     steps: [
@@ -787,6 +819,11 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
       const d1 = d1Opt !== null && d1Opt.kind === "number" ? d1Opt.value : 0;
       const d2 = d2Opt !== null && d2Opt.kind === "number" ? d2Opt.value : 0;
       if (!(d1 >= 0) || !(d2 >= 0)) throw new Error("CHAMFER distances must be ≥ 0.");
+      const echo = [`CHAMFER: distances ${trimNum(d1)} × ${trimNum(d2)}.`];
+      if (d1Opt !== null || d2Opt !== null) {
+        // Explicit supported/unsupported surface (Architect review).
+        echo.push("Distances apply to this CHAMFER run only — persistence across commands is not supported in this build.");
+      }
       return plan(
         [
           {
@@ -803,7 +840,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
             },
           },
         ],
-        [`CHAMFER: distances ${trimNum(d1)} × ${trimNum(d2)}.`],
+        echo,
       );
     },
   },

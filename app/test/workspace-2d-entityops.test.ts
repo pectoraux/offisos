@@ -427,7 +427,7 @@ test("modifyEntities break: two pieces (replace + add) with exact coordinates", 
 // --- JOIN / EXPLODE / setGeometry ---------------------------------------------------
 
 test("modifyEntities join: collinear lines merge; sources removed in the same batch", () => {
-  const doc = [...docElements(), flatLine("j1", 0, 0, 30, 0), flatLine("j2", 50, 0, 100, 0)];
+  const doc = [...docElements(), flatLine("j1", 0, 0, 30, 0), flatLine("j2", 30, 0, 100, 0)];
   const o = modifyEntities(doc, { op: "join", ids: ["j1", "j2"] });
   const edit = expectOutcome(o, 2);
   assert.deepEqual((edit.edits[0] as { patch: Record<string, unknown> }).patch, {
@@ -437,6 +437,15 @@ test("modifyEntities join: collinear lines merge; sources removed in the same ba
   assert.equal((edit.edits[1] as { elementId: string }).elementId, "j2");
   assert.equal(o.summary, "joined into one line");
   assert.equal(o.removedCount, 1);
+});
+
+test("modifyEntities join: collinear lines with a gap are a typed join_failed (no fabricated span)", () => {
+  const doc = [...docElements(), flatLine("j1", 0, 0, 30, 0), flatLine("j2", 50, 0, 100, 0)];
+  expectEntityOpError(
+    () => modifyEntities(doc, { op: "join", ids: ["j1", "j2"] }),
+    "join_failed",
+    /gap|fabricate/i,
+  );
 });
 
 test("modifyEntities explode: legacy rectangle explodes into its 4 canonical segments", () => {
