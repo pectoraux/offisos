@@ -164,6 +164,67 @@ export const COMMAND_PAYLOAD_SCHEMAS: Readonly<Record<CommandName, object>> = {
       },
     },
   },
+  // --- CAD-PARITY-003 (additive, Issue #78): canonical 2D entity commands.
+  // The payload is the coarse wire shape; the shared entity-ops core
+  // validates the geometry strictly (LOCK-007).
+  "entity.create": {
+    type: "object",
+    properties: {
+      entities: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              enum: [
+                "line",
+                "polyline",
+                "circle",
+                "arc",
+                "ellipse",
+                "spline",
+                "point",
+                "ray",
+                "xline",
+                "region",
+              ],
+            },
+            layer: { type: "string" },
+          },
+          required: ["type"],
+        },
+      },
+    },
+    required: ["entities"],
+  },
+  "entity.modify": {
+    type: "object",
+    properties: {
+      op: {
+        type: "string",
+        enum: [
+          "move",
+          "copy",
+          "rotate",
+          "scale",
+          "mirror",
+          "offset",
+          "trim",
+          "extend",
+          "stretch",
+          "fillet",
+          "chamfer",
+          "break",
+          "join",
+          "explode",
+          "setGeometry",
+        ],
+      },
+    },
+    required: ["op"],
+  },
   // --- COMPAT-CAD-001 (additive, api-contract.md §8): 2D drafting surface.
   // Entity inputs mirror src/drafting/entities.ts (validated strictly by the
   // handler — the schema is the coarse wire shape).
@@ -644,6 +705,62 @@ export const QUERY_PAYLOAD_SCHEMAS: Readonly<Record<QueryName, object>> = {
       exclude: { type: "array", items: { type: "string" } },
     },
     required: ["point"],
+  },
+  // CAD-PARITY-003 (additive, Issue #78): the shared precision engine as
+  // queries — same inputs as the host renderers (parity by construction).
+  "precision.snap": {
+    type: "object",
+    properties: {
+      cursor: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+      settings: {
+        type: "object",
+        properties: {
+          osnapModes: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: [
+                "endpoint",
+                "midpoint",
+                "center",
+                "quadrant",
+                "intersection",
+                "node",
+                "nearest",
+                "perpendicular",
+                "tangent",
+              ],
+            },
+          },
+          ortho: { type: "boolean" },
+          polar: { type: "boolean" },
+          polarAnglesDeg: { type: "array", items: { type: "number" } },
+          gridSnap: { type: "boolean" },
+          gridSize: { type: "number", exclusiveMinimum: 0 },
+          aperture: { type: "number", exclusiveMinimum: 0 },
+          tracking: { type: "boolean" },
+        },
+      },
+      lastPoint: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+    },
+    required: ["cursor"],
+  },
+  "precision.pick": {
+    type: "object",
+    properties: {
+      cursor: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+      aperture: { type: "number", exclusiveMinimum: 0 },
+    },
+    required: ["cursor"],
+  },
+  "precision.window": {
+    type: "object",
+    properties: {
+      mode: { type: "string", enum: ["window", "crossing"] },
+      min: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+      max: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+    },
+    required: ["mode", "min", "max"],
   },
   // COMPAT-CAD-002 (additive): BIM structure, semantics and standard cameras.
   "bim.getBuilding": { type: "object", properties: {} },

@@ -49,6 +49,33 @@ export interface PromptEngineState {
   readonly lastCommandId: string | null;
   /** LINE chain: from-points of the created segments (for the Undo option). */
   readonly chainStack: readonly Vec2[];
+  /** CAD-PARITY-003: active option sub-prompt (FILLET R, OFFSET T, CHAMFER
+   *  D1/D2 — the keyword opens its own input, then the flow returns to the
+   *  step). Null when no option is being collected. */
+  readonly optionCapture: OptionCapture | null;
+}
+
+/** An option currently collecting its own value. */
+export interface OptionCapture {
+  readonly stepId: string;
+  readonly keyword: string;
+  readonly kind: "number" | "distance" | "point";
+  readonly prompt: string;
+  readonly defaultValue?: number;
+}
+
+/** Storage key for a collected option value. */
+export function optionValueKey(stepId: string, keyword: string): string {
+  return `opt:${stepId}:${keyword}`;
+}
+
+/** Read a collected option value (null when the option was never used). */
+export function optionValue(
+  values: Readonly<Record<string, PromptValue>>,
+  stepId: string,
+  keyword: string,
+): PromptValue | null {
+  return values[optionValueKey(stepId, keyword)] ?? null;
 }
 
 export const IDLE_PROMPT_STATE: PromptEngineState = {
@@ -58,6 +85,7 @@ export const IDLE_PROMPT_STATE: PromptEngineState = {
   lastPoint: null,
   lastCommandId: null,
   chainStack: [],
+  optionCapture: null,
 };
 
 export type PromptEvent =
@@ -65,6 +93,7 @@ export type PromptEvent =
   | { readonly type: "typed"; readonly text: string; readonly cursor?: Vec2 | null }
   | { readonly type: "pick"; readonly point: Vec2 }
   | { readonly type: "entity"; readonly entity: EntityPick }
+  | { readonly type: "entityPoint"; readonly entity: EntityPick; readonly point: Vec2 }
   | { readonly type: "enter" }
   | { readonly type: "cancel" };
 
@@ -95,7 +124,31 @@ function command(state: PromptEngineState): WorkspaceCommand | null {
 function currentStep(state: PromptEngineState): PromptStep | null {
   const cmd = command(state);
   if (cmd === null) return null;
+  // CAD-PARITY-003: an active option sub-prompt replaces the visible step
+  // (its kind routes pick/typed input; the collected value is stored under
+  // the option key and the flow returns to the real step).
+  if (state.optionCapture !== null) {
+    const capture = state.optionCapture;
+    return capture.defaultValue !== undefined
+      ? {
+          id: optionValueKey(capture.stepId, capture.keyword),
+          kind: capture.kind,
+          prompt: capture.prompt,
+          defaultValue: capture.defaultValue,
+        }
+      : {
+          id: optionValueKey(capture.stepId, capture.keyword),
+          kind: capture.kind,
+          prompt: capture.prompt,
+        };
+  }
   return cmd.steps[state.stepIndex] ?? null;
+}
+
+/** The step the HOST should interact with (option sub-prompt aware).
+ *  Exported for both host renderers so pick routing stays identical. */
+export function effectiveStep(state: PromptEngineState): PromptStep | null {
+  return currentStep(state);
 }
 
 function promptFor(state: PromptEngineState): string | null {
@@ -183,6 +236,15 @@ function collectValue(
   const step = currentStep(state);
   if (step === null) return { state, output: activeOutput(state, echo) };
 
+  // CAD-PARITY-003: option sub-prompt collection — the value is stored
+  // under the option key and the flow returns to the real step.
+  if (state.optionCapture !== null) {
+    const key = optionValueKey(state.optionCapture.stepId, state.optionCapture.keyword);
+    const values: Record<string, PromptValue> = { ...state.values, [key]: value };
+    const next: PromptEngineState = { ...state, values, optionCapture: null };
+    return { state: next, output: activeOutput(next, echo) };
+  }
+
   let values: Record<string, PromptValue> = { ...state.values };
   let lastPoint = state.lastPoint;
   let chainStack = state.chainStack;
@@ -199,6 +261,11 @@ function collectValue(
       const entities = existing !== undefined && existing.kind === "entities" ? [...existing.entities] : [];
       entities.push(...value.entities);
       values[step.id] = { kind: "entities", entities };
+    } else if (value.kind === "entityPoints") {
+      const existing = values[step.id];
+      const picks = existing !== undefined && existing.kind === "entityPoints" ? [...existing.picks] : [];
+      picks.push(...value.picks);
+      values[step.id] = { kind: "entityPoints", picks };
     } else {
       values[step.id] = value;
     }
@@ -225,8 +292,14 @@ function collectValue(
       }
       const prevFrom = state.values.from !== undefined && state.values.from.kind === "point" ? (state.values.from as { kind: "point"; point: Vec2 }).point : null;
       chainStack = prevFrom === null ? chainStack : [...chainStack, prevFrom];
-      // Carry the just-collected point as the new chain base.
-      const carry: Record<string, PromptValue> = { from: value };
+      // Carry the just-collected point as the new chain base — or, for
+      // chainKeep commands (RAY/XLINE), retain the FIRST step's value so
+      // one base point serves many directions.
+      const firstStep = cmd.steps[0];
+      const carry: Record<string, PromptValue> =
+        cmd.chainKeep === true && firstStep !== undefined && values[firstStep.id] !== undefined
+          ? { [firstStep.id]: values[firstStep.id]! }
+          : { from: value };
       const next: PromptEngineState = {
         ...state,
         values: carry,
@@ -305,7 +378,42 @@ function applyOptionKeyword(
     return completeCommand({ ...state, values }, cmd, ["Close."], ctx);
   }
 
+  // CAD-PARITY-003: SPLINE's Close behaves like POLYLINE's (finish the
+  // command with the closed flag).
+  if (cmd.id === "spline" && option.keyword === "C") {
+    const closed: PromptValue = { kind: "text", text: "C" };
+    const values = { ...state.values, closed };
+    return completeCommand({ ...state, values }, cmd, ["Close."], ctx);
+  }
+
+  // CAD-PARITY-003 generic mechanism: an option with `input` opens its own
+  // sub-prompt (OFFSET's Through, FILLET's Radius, CHAMFER's distances).
+  // The collected value is stored under the option key; the flow returns to
+  // the step afterwards. Options WITHOUT input keep their legacy behavior.
+  if (option.input !== undefined) {
+    const capture: OptionCapture = option.defaultValue !== undefined
+      ? {
+          stepId: step.id,
+          keyword: option.keyword,
+          kind: option.input,
+          prompt: option.optionPrompt ?? `${option.label}:`,
+          defaultValue: option.defaultValue,
+        }
+      : {
+          stepId: step.id,
+          keyword: option.keyword,
+          kind: option.input,
+          prompt: option.optionPrompt ?? `${option.label}:`,
+        };
+    const next: PromptEngineState = { ...state, optionCapture: capture };
+    return { state: next, output: activeOutput(next, echoKeyword(option)) };
+  }
+
   return { state, output: activeOutput(state, [`Option ${option.label} is not available in this state.`]) };
+}
+
+function echoKeyword(option: { readonly keyword: string; readonly label: string }): readonly string[] {
+  return [`${option.keyword} — ${option.label}`];
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +444,12 @@ export function applyPromptEvent(
       if (cmd === null) {
         return { state, output: idleOutput(["*Cancel*"]) };
       }
+      // An active option sub-prompt cancels back to its step (the command
+      // keeps running — AutoCAD-class behavior).
+      if (state.optionCapture !== null) {
+        const next: PromptEngineState = { ...state, optionCapture: null };
+        return { state: next, output: activeOutput(next, ["Option cancelled."]) };
+      }
       return { state: { ...IDLE_PROMPT_STATE, lastCommandId: state.lastCommandId }, output: idleOutput(["*Cancel*"]) };
     }
 
@@ -352,6 +466,14 @@ export function applyPromptEvent(
       }
       const step = currentStep(state);
       if (step === null) return { state, output: activeOutput(state, []) };
+
+      // Enter accepts an option sub-prompt's declared default.
+      if (state.optionCapture !== null) {
+        if (state.optionCapture.defaultValue !== undefined) {
+          return collectValue(state, cmd, { kind: "number", value: state.optionCapture.defaultValue }, [`<${state.optionCapture.defaultValue}>`], ctx);
+        }
+        return { state, output: activeOutput(state, ["This option requires a value — type one or press Esc to cancel the option."]) };
+      }
 
       // Option-free Enter on an optional multiple step: finish collection.
       if (step.optional === true && (step.multiple === true || step.kind === "entity")) {
@@ -386,6 +508,17 @@ export function applyPromptEvent(
         const min = step.minInputs ?? 1;
         if (points.length < min) {
           return { state, output: activeOutput(state, [`Need at least ${min} more point(s) — press Esc to cancel.`]) };
+        }
+        return completeCommand(state, cmd, [], ctx);
+      }
+
+      // Optional multiple ENTITY-POINT step (TRIM/EXTEND targets): finish.
+      if (step.optional === true && step.multiple === true && step.kind === "entityPoint") {
+        const existing = state.values[step.id];
+        const picks = existing !== undefined && existing.kind === "entityPoints" ? existing.picks : [];
+        const min = step.minInputs ?? 1;
+        if (picks.length < min) {
+          return { state, output: activeOutput(state, [`Need at least ${min} object pick(s) — ${picks.length} collected.`]) };
         }
         return completeCommand(state, cmd, [], ctx);
       }
@@ -436,6 +569,22 @@ export function applyPromptEvent(
         const vector: Vec2 = [event.point[0] - base[0], event.point[1] - base[1]];
         return collectValue(state, cmd, { kind: "displacement", vector }, [`displacement (${fmt(vector)})`], ctx);
       }
+      // CAD-PARITY-003: a NUMBER step with a base step resolves a pick to
+      // the angle base→cursor in DEGREES (ROTATE's "Specify rotation angle"
+      // with a drag — AutoCAD-class behavior).
+      if (step.kind === "number" && step.baseStep !== undefined) {
+        const base = stepBase(state);
+        if (base === null) {
+          return { state, output: activeOutput(state, ["Angle pick needs a base point — type the angle instead."]) };
+        }
+        const dx = event.point[0] - base[0];
+        const dy = event.point[1] - base[1];
+        if (Math.hypot(dx, dy) <= 1e-9) {
+          return { state, output: activeOutput(state, ["Angle pick needs a point away from the base."]) };
+        }
+        const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+        return collectValue(state, cmd, { kind: "number", value: deg }, [`(${fmt(event.point)}) → angle ${deg.toFixed(2)}°`], ctx);
+      }
       return { state, output: activeOutput(state, ["This step does not accept a point pick."]) };
     }
 
@@ -452,6 +601,30 @@ export function applyPromptEvent(
         }
       }
       return collectValue(state, cmd, { kind: "entities", entities: [event.entity] }, [`1 found (${event.entity.id})`], ctx);
+    }
+
+    // CAD-PARITY-003: object pick that ALSO records where it was picked —
+    // the pick location is semantic for TRIM/EXTEND/FILLET/CHAMFER/BREAK
+    // (it selects the piece/corner to operate on).
+    case "entityPoint": {
+      if (cmd === null) return { state, output: idleOutput([]) };
+      const step = currentStep(state);
+      if (step === null || step.kind !== "entityPoint") {
+        return { state, output: activeOutput(state, ["This step does not accept an object pick."]) };
+      }
+      if (step.validate !== undefined) {
+        const rejection = step.validate(event.entity);
+        if (rejection !== null) {
+          return { state, output: activeOutput(state, [rejection]) };
+        }
+      }
+      return collectValue(
+        state,
+        cmd,
+        { kind: "entityPoints", picks: [{ entity: event.entity, point: event.point }] },
+        [`1 found (${event.entity.id}) at (${fmt(event.point)})`],
+        ctx,
+      );
     }
 
     case "typed": {
@@ -526,6 +699,11 @@ export function applyPromptEvent(
             );
           }
           return { state, output: activeOutput(state, [`'${text}' is not an object — pick in the canvas or type P for the previous selection.`]) };
+        }
+        case "entityPoint": {
+          // The pick LOCATION is semantic here (TRIM/EXTEND/FILLET/…) — a
+          // previous-selection shortcut cannot supply it.
+          return { state, output: activeOutput(state, [`'${text}' is not an object — pick the object in the canvas (the pick point selects the piece to operate on).`]) };
         }
         case "displacement": {
           const resolution = resolveTypedPoint(text, null, event.cursor ?? null);

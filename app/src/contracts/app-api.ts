@@ -36,6 +36,9 @@ export type CommandName =
   | "document.deserialize"
   | "document.save"
   | "geometry.prepare"
+  // --- CAD-PARITY-003 (additive, Issue #78): canonical 2D entities ---
+  | "entity.create"
+  | "entity.modify"
   // --- COMPAT-CAD-001 (additive, api-contract.md §8): 2D drafting ---
   | "drafting.createEntities"
   | "drafting.move"
@@ -102,6 +105,12 @@ export type QueryName =
   | "impact.cascade"
   // COMPAT-CAD-001 (additive): deterministic snap resolution.
   | "drafting.snap"
+  // CAD-PARITY-003 (additive, Issue #78): the shared precision engine as
+  // queries — the SAME modules the host renderers run (parity by
+  // construction).
+  | "precision.snap"
+  | "precision.pick"
+  | "precision.window"
   // COMPAT-CAD-002 (additive): BIM structure, semantics and cameras.
   | "bim.getBuilding"
   // COMPAT-BIM-003 (additive): component/material/coordination inventory

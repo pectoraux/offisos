@@ -66,3 +66,42 @@ export {
   type NormalizedKeyEvent,
 } from "./keymap.js";
 export { classifyTypedInput, resolveTypedPoint, resolveTypedDistance, type TypedInput } from "./typed-input.js";
+// CAD-PARITY-003 (Issue #78): the canonical 2D geometry vocabulary, the
+// shared entity operations and the precision engine.
+export { COMMANDS_2D } from "./commands-2d.js";
+export {
+  createEntities,
+  modifyEntities,
+  EntityOpError,
+  type EntityCreateOutcome,
+  type EntityModifyOp,
+  type EntityOpOutcome,
+} from "./entity-ops.js";
+export {
+  geomFromElement,
+  isCanonicalEntity,
+  isDraftingGeometry,
+  isRectangleElement,
+  layerOfElement,
+  propsFromGeom,
+} from "./geometry/bridge.js";
+export type { Geom, GeomType } from "./geometry/types.js";
+export {
+  DEFAULT_PRECISION,
+  OSNAP_LABELS,
+  constrainPoint,
+  gripsOf,
+  pickAt as pickAt2d,
+  resolveSnap,
+  selectWindow,
+  toEntities,
+  type ConstrainResult,
+  type Entity as GeomEntity,
+  type Grip as GeomGrip,
+  type OsnapMode,
+  type PrecisionSettings,
+  type SnapResult,
+  type TrackingPath,
+  type WindowSelection,
+} from "./precision-2d.js";
+export { effectiveStep, optionValue, optionValueKey, type OptionCapture } from "./prompt-engine.js";

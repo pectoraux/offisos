@@ -56,6 +56,10 @@ export type CommandCategory =
  * - text:      a typed string (e.g. story name).
  * - entity:    a pick of an existing element (carries its snapshot so
  *              builders stay pure — no host queries inside the engine).
+ * - entityPoint: a pick that selects the element under the cursor AND
+ *              records the pick point (TRIM/EXTEND/FILLET/CHAMFER/BREAK
+ *              targets — the pick location selects the piece to operate
+ *              on, AutoCAD-class semantics).
  * - displacement: a vector (typed "dx,dy" or base→pick); used by MOVE/COPY.
  */
 export type PromptInputKind =
@@ -64,12 +68,22 @@ export type PromptInputKind =
   | "number"
   | "text"
   | "entity"
+  | "entityPoint"
   | "displacement";
 
-/** Per-step option keyword (e.g. LINE's [Undo], POLYLINE's [Close]). */
+/** Per-step option keyword (e.g. LINE's [Undo], POLYLINE's [Close]).
+ *  CAD-PARITY-003 additive: an option with `input` collects its own value
+ *  (a sub-prompt) and returns to the step — OFFSET's Through, FILLET's
+ *  Radius, CHAMFER's distances. */
 export interface PromptStepOption {
   readonly keyword: string;
   readonly label: string;
+  /** When set, the keyword opens a sub-prompt for this input kind. */
+  readonly input?: "number" | "distance" | "point";
+  /** Sub-prompt text shown while the option value is collected. */
+  readonly optionPrompt?: string;
+  /** Default accepted on Enter for number sub-prompts. */
+  readonly defaultValue?: number;
 }
 
 export interface PromptStep {
@@ -106,6 +120,7 @@ export type PromptValue =
   | { readonly kind: "number"; readonly value: number }
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "entities"; readonly entities: readonly EntityPick[] }
+  | { readonly kind: "entityPoints"; readonly picks: readonly EntityPointPick[] }
   | { readonly kind: "displacement"; readonly vector: Vec2 };
 
 /** A pick of one existing element, snapshot at pick time (pure engine —
@@ -114,6 +129,13 @@ export interface EntityPick {
   readonly id: string;
   readonly kind: string;
   readonly props: Readonly<Record<string, unknown>>;
+}
+
+/** An object pick that also records WHERE it was picked (CAD-PARITY-003:
+ *  TRIM/EXTEND/FILLET/CHAMFER/BREAK — the pick location is semantic). */
+export interface EntityPointPick {
+  readonly entity: EntityPick;
+  readonly point: Vec2;
 }
 
 // ---------------------------------------------------------------------------

@@ -45,6 +45,17 @@ import {
   trimEntity,
 } from "../drafting/commands.js";
 import { resolveSnap } from "../drafting/snap.js";
+// CAD-PARITY-003 (additive): the shared 2D entity operations + precision
+// engine (workspace core — engine-free, LOCK-018 scanned).
+import { createEntities, modifyEntities, EntityOpError } from "../workspace/entity-ops.js";
+import {
+  pickAt as precisionPickAt,
+  resolveSnap as precisionResolveSnap,
+  selectWindow as precisionSelectWindow,
+  toEntities as toPrecisionEntities,
+  type OsnapMode,
+  type PrecisionSettings,
+} from "../workspace/precision-2d.js";
 import { canonicalSnapKinds, validateDraftingSettings, validateBimSettings } from "../caddocument/workspace.js";
 import type { LayerRecord } from "../contracts/caddocument.js";
 // COMPAT-CAD-002: the pure BIM authoring core (LOCK-018 scanned).
@@ -168,6 +179,11 @@ export class AppApiHandler {
         return this.cmdSave();
       case "geometry.prepare":
         return this.cmdPrepareGeometry(command.payload);
+      // --- CAD-PARITY-003 (additive): canonical 2D entity commands ---
+      case "entity.create":
+        return this.cmdEntityCreate(command.payload);
+      case "entity.modify":
+        return this.cmdEntityModify(command.payload);
       // --- COMPAT-CAD-001 (additive): 2D drafting commands ---
       case "drafting.createEntities":
         return this.cmdDraftingCreate(command.payload);
@@ -497,6 +513,14 @@ export class AppApiHandler {
         return await this.qImpactCascade(query.payload);
       case "drafting.snap":
         return this.qDraftingSnap(query.payload);
+      // --- CAD-PARITY-003 (additive): precision queries (the SAME shared
+      // modules the host renderers run — parity by construction) ---
+      case "precision.snap":
+        return this.qPrecisionSnap(query.payload);
+      case "precision.pick":
+        return this.qPrecisionPick(query.payload);
+      case "precision.window":
+        return this.qPrecisionWindow(query.payload);
       // --- COMPAT-CAD-002 (additive): BIM queries ---
       case "bim.getBuilding":
         return this.qBimGetBuilding();
@@ -776,6 +800,173 @@ export class AppApiHandler {
     } catch (e) {
       return err("drafting_invalid", (e as Error).message, false);
     }
+  }
+
+  // --- CAD-PARITY-003 (additive): canonical 2D entity commands ---------------
+
+  /** entity.create — validate + apply ONE atomic create batch of canonical
+   *  2D entities (the CAD-2D-001 vocabulary through the shared geometry
+   *  kernel; one versioned command, one revision, one undo entry). */
+  private cmdEntityCreate(payload: unknown): CommandQueryResponse {
+    const p = payload as { entities?: unknown } | null;
+    if (p === null || typeof p !== "object" || !Array.isArray(p.entities)) {
+      return err("bad_payload", "entity.create requires an entities array", true);
+    }
+    try {
+      const before = new Set(this.doc.allElements().map((el) => el.id));
+      const outcome = createEntities(
+        this.doc.allElements(),
+        (id) => this.doc.layerById(id) !== undefined,
+        p.entities,
+      );
+      if (outcome.edit === null) {
+        return ok({ applied: false, reason: outcome.summary, snapshot: this.doc.snapshot() });
+      }
+      this.doc.execute(outcome.edit);
+      const created = this.doc.allElements().filter((el) => !before.has(el.id)).map((el) => el.id);
+      return ok({ applied: true, created, summary: outcome.summary, snapshot: this.doc.snapshot() });
+    } catch (e) {
+      if (e instanceof EntityOpError) return err(e.code, e.message, false);
+      return err("entity_invalid", (e as Error).message, false);
+    }
+  }
+
+  /** entity.modify — apply ONE canonical-geometry modify operation (the
+   *  CAD-2D-002 vocabulary: move/copy/rotate/scale/mirror/offset/trim/
+   *  extend/stretch/fillet/chamfer/break/join/explode/setGeometry) as a
+   *  single atomic revision. */
+  private cmdEntityModify(payload: unknown): CommandQueryResponse {
+    const p = payload as { op?: unknown } | null;
+    if (p === null || typeof p !== "object" || typeof p.op !== "string") {
+      return err("bad_payload", "entity.modify requires an op string", true);
+    }
+    try {
+      const outcome = modifyEntities(this.doc.allElements(), p as never);
+      if (outcome.edit === null) {
+        return ok({ applied: false, reason: outcome.summary, snapshot: this.doc.snapshot() });
+      }
+      this.doc.execute(outcome.edit);
+      return ok({
+        applied: true,
+        summary: outcome.summary,
+        created: outcome.createdCount,
+        modified: outcome.modifiedCount,
+        removed: outcome.removedCount,
+        snapshot: this.doc.snapshot(),
+      });
+    } catch (e) {
+      if (e instanceof EntityOpError) return err(e.code, e.message, false);
+      return err("entity_invalid", (e as Error).message, false);
+    }
+  }
+
+  /** The visible canonical entity view shared by the precision queries —
+   *  identical filtering to the host renderers (hidden layers are neither
+   *  pickable nor snappable) so queries and renderers see one world. */
+  private visiblePrecisionEntities() {
+    const visible = new Set(this.doc.layerTable.filter((l) => l.visible).map((l) => l.id));
+    return toPrecisionEntities(
+      this.doc.allElements().filter((el) => {
+        const layer = (el.props as Record<string, unknown>).layer;
+        return typeof layer === "string" && visible.has(layer);
+      }),
+    );
+  }
+
+  private static readonly OSNAP_MODES: readonly OsnapMode[] = [
+    "endpoint",
+    "midpoint",
+    "center",
+    "quadrant",
+    "intersection",
+    "node",
+    "nearest",
+    "perpendicular",
+    "tangent",
+  ];
+
+  /** precision.snap (query) — the SAME resolveSnap the host renderers run
+   *  over the SAME visible entity view (parity by construction). */
+  private qPrecisionSnap(payload: unknown): CommandQueryResponse {
+    const p = payload as {
+      cursor?: unknown;
+      settings?: unknown;
+      lastPoint?: unknown;
+    } | null;
+    if (
+      p === null || typeof p !== "object" ||
+      !Array.isArray(p.cursor) || p.cursor.length !== 2 || !p.cursor.every((n) => typeof n === "number" && Number.isFinite(n))
+    ) {
+      return err("bad_payload", "precision.snap requires cursor: [x, y] finite numbers", true);
+    }
+    const s = (p.settings ?? {}) as Record<string, unknown>;
+    const modes = Array.isArray(s.osnapModes)
+      ? (s.osnapModes as unknown[]).filter((m): m is OsnapMode =>
+          typeof m === "string" && (AppApiHandler.OSNAP_MODES as readonly string[]).includes(m))
+      : [];
+    const settings: PrecisionSettings = {
+      osnapModes: modes,
+      ortho: s.ortho === true,
+      polar: s.polar === true,
+      polarAnglesDeg: Array.isArray(s.polarAnglesDeg)
+        ? (s.polarAnglesDeg as unknown[]).filter((n) => typeof n === "number" && Number.isFinite(n)) as number[]
+        : [0, 45, 90, 135, 180, 225, 270, 315],
+      gridSnap: s.gridSnap === true,
+      gridSize: typeof s.gridSize === "number" && s.gridSize > 0 ? s.gridSize : 10,
+      aperture: typeof s.aperture === "number" && s.aperture > 0 ? s.aperture : 10,
+      tracking: s.tracking === true,
+    };
+    const lastPoint = Array.isArray(p.lastPoint) && p.lastPoint.length === 2 && p.lastPoint.every((n) => typeof n === "number" && Number.isFinite(n))
+      ? { x: p.lastPoint[0] as number, y: p.lastPoint[1] as number }
+      : null;
+    try {
+      const result = precisionResolveSnap(
+        this.visiblePrecisionEntities(),
+        { x: p.cursor[0] as number, y: p.cursor[1] as number },
+        settings,
+        lastPoint,
+      );
+      return ok(result);
+    } catch (e) {
+      return err("precision_failed", (e as Error).message, false);
+    }
+  }
+
+  /** precision.pick (query) — deterministic entity pick under the cursor. */
+  private qPrecisionPick(payload: unknown): CommandQueryResponse {
+    const p = payload as { cursor?: unknown; aperture?: unknown } | null;
+    if (
+      p === null || typeof p !== "object" ||
+      !Array.isArray(p.cursor) || p.cursor.length !== 2 || !p.cursor.every((n) => typeof n === "number" && Number.isFinite(n))
+    ) {
+      return err("bad_payload", "precision.pick requires cursor: [x, y] finite numbers", true);
+    }
+    const aperture = typeof p.aperture === "number" && p.aperture > 0 ? p.aperture : 10;
+    const hit = precisionPickAt(
+      this.visiblePrecisionEntities(),
+      { x: p.cursor[0] as number, y: p.cursor[1] as number },
+      aperture,
+    );
+    return ok(hit === null ? { id: null } : { id: hit.id, type: hit.geom.type, layer: hit.layer });
+  }
+
+  /** precision.window (query) — deterministic window/crossing selection. */
+  private qPrecisionWindow(payload: unknown): CommandQueryResponse {
+    const p = payload as { mode?: unknown; min?: unknown; max?: unknown } | null;
+    if (
+      p === null || typeof p !== "object" ||
+      (p.mode !== "window" && p.mode !== "crossing") ||
+      !Array.isArray(p.min) || p.min.length !== 2 || !p.min.every((n) => typeof n === "number" && Number.isFinite(n)) ||
+      !Array.isArray(p.max) || p.max.length !== 2 || !p.max.every((n) => typeof n === "number" && Number.isFinite(n))
+    ) {
+      return err("bad_payload", "precision.window requires mode ('window'|'crossing') and min/max: [x, y] finite numbers", true);
+    }
+    const ids = precisionSelectWindow(this.visiblePrecisionEntities(), {
+      mode: p.mode as "window" | "crossing",
+      min: { x: p.min[0] as number, y: p.min[1] as number },
+      max: { x: p.max[0] as number, y: p.max[1] as number },
+    });
+    return ok({ ids });
   }
 
   // --- COMPAT-CAD-002 (additive): 3D/BIM authoring -----------------------------

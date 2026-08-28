@@ -21,6 +21,8 @@
  */
 
 import type { Vec2 } from "../drafting/precision.js";
+import { propsToGeom } from "./geometry/types.js";
+import { COMMANDS_2D } from "./commands-2d.js";
 import type {
   AppApiCommandPlanEntry,
   CommandCategory,
@@ -55,6 +57,12 @@ export interface WorkspaceCommand {
    * active with the final step re-prompted and the base carried forward.
    */
   readonly chained?: boolean;
+  /**
+   * CAD-PARITY-003: chained completion KEEPS the first step's value
+   * instead of advancing the base (RAY/XLINE: one base point, many
+   * directions — AutoCAD-class behavior). Requires `chained`.
+   */
+  readonly chainKeep?: boolean;
   /** Builder for interactive commands (steps completed). */
   readonly build?: (values: Readonly<Record<string, PromptValue>>, ctx: CommandContext) => CommandPlan;
   /** Executor for instant commands (no steps). */
@@ -131,16 +139,35 @@ export function isBimPick(pick: EntityPick): boolean {
 
 function partitionSelection(entities: readonly EntityPick[]): {
   readonly drafting: readonly string[];
+  readonly canonical: readonly string[];
   readonly bim: readonly string[];
 } {
   const drafting: string[] = [];
+  const canonical: string[] = [];
   const bim: string[] = [];
   // Deterministic order: preserve pick order within each partition.
+  // CAD-PARITY-003: drafting entities stored in the canonical flat
+  // convention (entity.create / entity.modify write-back) route to the
+  // entity.* command surface; the legacy COMPAT-CAD-001 vocabulary keeps
+  // its drafting.* commands (regression-safe); BIM keeps bim.*.
   for (const e of entities) {
-    if (isDraftingPick(e)) drafting.push(e.id);
-    else if (isBimPick(e)) bim.push(e.id);
+    if (isDraftingPick(e)) {
+      if (isCanonicalFlatPick(e)) canonical.push(e.id);
+      else drafting.push(e.id);
+    } else if (isBimPick(e)) bim.push(e.id);
   }
-  return { drafting, bim };
+  return { drafting, canonical, bim };
+}
+
+/** CAD-PARITY-003: a drafting pick decodable as a canonical flat geometry
+ *  record (the entity.* command surface). Legacy-convention entities (from
+ *  drafting.createEntities: from/to, points, center/radius, corner1/2,
+ *  dimensions) are NOT canonical-flat and keep the drafting.* path. */
+function isCanonicalFlatPick(pick: EntityPick): boolean {
+  if (pick.kind !== "geometry") return false;
+  const props = pick.props as Record<string, unknown>;
+  if (props.drafting !== true) return false;
+  return propsToGeom(props) !== null;
 }
 
 /** Project a point onto the wall axis; returns the signed distance from the
@@ -225,7 +252,7 @@ export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
   {
     id: "polyline",
     name: "POLYLINE",
-    aliases: ["PL"],
+    aliases: ["PL", "PLINE"],
     label: "Polyline",
     description: "Draw a polyline. Pick vertices; Enter finishes (min 2), C closes.",
     category: "draw",
@@ -680,9 +707,10 @@ export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
       const objects = entitiesValue(values, "objects");
       const v = values.target;
       const vector: Vec2 = v !== undefined && v.kind === "displacement" ? v.vector : [0, 0];
-      const { drafting, bim } = partitionSelection(objects);
+      const { drafting, canonical, bim } = partitionSelection(objects);
       const appApi: AppApiCommandPlanEntry[] = [];
       if (drafting.length > 0) appApi.push({ name: "drafting.move", payload: { ids: drafting, dx: vector[0], dy: vector[1] } });
+      if (canonical.length > 0) appApi.push({ name: "entity.modify", payload: { op: "move", ids: canonical, dx: vector[0], dy: vector[1] } });
       if (bim.length > 0) appApi.push({ name: "bim.move", payload: { ids: bim, dx: vector[0], dy: vector[1], dz: 0 } });
       if (appApi.length === 0) throw new Error("MOVE received no movable objects.");
       return plan(appApi, [`MOVE: ${objects.length} object(s) by (${trimNum(vector[0])}, ${trimNum(vector[1])}).`]);
@@ -705,9 +733,10 @@ export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
       const objects = entitiesValue(values, "objects");
       const v = values.target;
       const vector: Vec2 = v !== undefined && v.kind === "displacement" ? v.vector : [0, 0];
-      const { drafting, bim } = partitionSelection(objects);
+      const { drafting, canonical, bim } = partitionSelection(objects);
       const appApi: AppApiCommandPlanEntry[] = [];
       if (drafting.length > 0) appApi.push({ name: "drafting.copy", payload: { ids: drafting, dx: vector[0], dy: vector[1] } });
+      if (canonical.length > 0) appApi.push({ name: "entity.modify", payload: { op: "copy", ids: canonical, dx: vector[0], dy: vector[1] } });
       if (bim.length > 0) appApi.push({ name: "bim.copy", payload: { ids: bim, dx: vector[0], dy: vector[1], dz: 0 } });
       if (appApi.length === 0) throw new Error("COPY received no copyable objects.");
       return plan(appApi, [`COPY: ${objects.length} object(s) by (${trimNum(vector[0])}, ${trimNum(vector[1])}).`]);
@@ -733,52 +762,11 @@ export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
       return plan(appApi, [`ERASE: ${objects.length} object(s).`]);
     },
   },
-  {
-    id: "trim",
-    name: "TRIM",
-    aliases: ["TR"],
-    label: "Trim",
-    description: "Trim a line at the pick point (the picked side is removed).",
-    category: "modify",
-    ribbonTab: "Home",
-    steps: [
-      { id: "target", kind: "entity", prompt: "Select object to trim:" },
-      { id: "pick", kind: "point", prompt: "Specify the side to remove:" },
-    ],
-    build: (values) => {
-      const target = entitiesValue(values, "target")[0];
-      if (target === undefined) throw new Error("TRIM requires a target.");
-      if (!isDraftingPick(target)) throw new Error("TRIM supports drafting entities only (lines).");
-      const pick = pointValue(values, "pick");
-      return plan(
-        [{ name: "drafting.trim", payload: { targetId: target.id, pick: [pick[0], pick[1]] } }],
-        [`TRIM: '${target.id}' at (${fmtPoint(pick)}).`],
-      );
-    },
-  },
-  {
-    id: "extend",
-    name: "EXTEND",
-    aliases: ["EX"],
-    label: "Extend",
-    description: "Extend a line toward the pick point.",
-    category: "modify",
-    ribbonTab: "Home",
-    steps: [
-      { id: "target", kind: "entity", prompt: "Select object to extend:" },
-      { id: "pick", kind: "point", prompt: "Specify the boundary direction:" },
-    ],
-    build: (values) => {
-      const target = entitiesValue(values, "target")[0];
-      if (target === undefined) throw new Error("EXTEND requires a target.");
-      if (!isDraftingPick(target)) throw new Error("EXTEND supports drafting entities only (lines).");
-      const pick = pointValue(values, "pick");
-      return plan(
-        [{ name: "drafting.extend", payload: { targetId: target.id, pick: [pick[0], pick[1]] } }],
-        [`EXTEND: '${target.id}' toward (${fmtPoint(pick)}).`],
-      );
-    },
-  },
+  // TRIM and EXTEND are superseded by the CAD-PARITY-003 generalized
+  // commands (entity.modify trim/extend over the full CAD-2D vocabulary
+  // with implied-all-edges Enter semantics) — see commands-2d.ts. The
+  // drafting.trim / drafting.extend App API commands remain available for
+  // compatibility (COMPAT-CAD-001 regression surface).
 
   // --- Document (ribbon: File quick access) ---------------------------------
   {
@@ -1008,6 +996,8 @@ export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
     steps: [],
     instant: () => plan([], ["CANCEL."], [{ action: "selection.clear" }]),
   },
+  // --- CAD-PARITY-003 (Issue #78): the 2D draw/modify vocabulary ---------
+  ...COMMANDS_2D,
 ];
 
 function normalize(a: number): number {
