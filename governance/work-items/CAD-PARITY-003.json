@@ -89,6 +89,64 @@
         "issue": 78,
         "pr": 79
       }
+    },
+    {
+      "from": "PR_OPEN",
+      "to": "VERIFYING",
+      "at": "2026-08-28T16:10:00Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "EV-003 recorded: all 34 PR-head check runs green on 20a8b41/bebce4b (cad-parity-003 runs #3/#4, governance #142, every regression workflow); PR #79 ready for Architect review of the actual UI and workflow behavior.",
+      "references": {
+        "pr": 79,
+        "evidence": [
+          "EV-003"
+        ]
+      }
+    },
+    {
+      "from": "VERIFYING",
+      "to": "ARCHITECT_REVIEW",
+      "at": "2026-08-28T16:21:00Z",
+      "actor": "pectoraux",
+      "role": "architect",
+      "reason": "Architect review started on PR #79 against the Issue #78 acceptance bar (the formal GitHub REQUEST_CHANGES could not be submitted because the connected account is the PR author; PR comment 5454974593 is the authoritative review record).",
+      "references": {
+        "pr": 79,
+        "evidence": [
+          "EV-001",
+          "EV-002",
+          "EV-003"
+        ]
+      }
+    },
+    {
+      "from": "ARCHITECT_REVIEW",
+      "to": "IMPLEMENTING",
+      "at": "2026-08-28T16:25:00Z",
+      "actor": "pectoraux",
+      "role": "architect",
+      "reason": "Architect review complete \u2014 CHANGES REQUESTED (DEC-001, PR comment 5454974593): the architecture and CI posture are strong, but two canonical geometry defects must be fixed before approval.",
+      "references": {
+        "decision": "DEC-001"
+      },
+      "failure_reason": "(1) joinLines merges any collinear lines by min/max projection without requiring touching/overlap \u2014 disconnected lines with a gap are fabricated into one continuous line, violating the requirement that modify operations operate on canonical geometry without inventing geometry. (2) extendGeom's ARC start-side path searches CCW from the current start and reconstructs the arc from that hit \u2014 the start can move in the wrong direction and shorten or misorient the arc; directed regression tests for both picked ends and correct interval handling are required. Additionally the documented omissions (ROTATE/SCALE reference mode, advanced repeat/persistence behaviors) must be represented explicitly as supported/unsupported command behavior with typed failures rather than presented as complete parity."
+    },
+    {
+      "from": "IMPLEMENTING",
+      "to": "PR_OPEN",
+      "at": "2026-08-28T17:00:00Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "Architect-review remediation complete (DEC-001) and PR #79 returned for re-review at head e1d2d4650875: JOIN rejects disconnected geometry in all join families (lines: contiguous-span requirement with the typed no_join gap failure; arcs: the same contiguity rule on the shared circle; polyline joins already required end-to-end connection), the App API surfaces join_failed typed declines, ARC EXTEND uses directed interval semantics (the end extends CCW, the start extends backwards/CW; valid targets restricted to the complementary arc so inside-sweep crossings can never shorten or misorient the arc; wrap-around exact on both ends), and the supported/unsupported surface is explicit (ROTATE R / SCALE R / COPY M typed declines while the command keeps running; FILLET radius and CHAMFER distances echo the per-run persistence limitation). Verification: 187 deterministic 2D tests incl. the new directed regressions, full app suite 596 tests with the 409-test regression baseline intact, web lint/typecheck/build + parity-fixture smoke (save sha a48a29a8\u2026 unchanged), electron typecheck/build + the 19-step real-UI workspace smoke + the seven engine-free/OCCT smokes; the ifc/components smokes run in CI on the pinned ifcopenshell toolchain. EV-004 records the remediation evidence; CI re-runs on this head.",
+      "references": {
+        "pr": 79,
+        "commit": "e1d2d4650875c190a8f6c0fb9f4b69698283c4ca",
+        "evidence": [
+          "EV-004"
+        ],
+        "decision": "DEC-001"
+      }
     }
   ],
   "evidence": [
@@ -126,6 +184,34 @@
         "workflow_run": "33188008440",
         "pr": 79
       }
+    },
+    {
+      "id": "EV-004",
+      "type": "automated-test-suite",
+      "description": "Architect-review remediation (DEC-001) verified at head e1d2d4650875c190a8f6c0fb9f4b69698283c4ca: (1) JOIN never fabricates geometry \u2014 joinLines requires the projected intervals to form ONE contiguous span (touch or overlap within tolerance) and rejects a gap with the typed no_join failure 'collinear lines have a gap \u2014 JOIN cannot fabricate the missing span'; joinArcs applies the same contiguity rule on the shared circle (cut at the first arc's start, unwrap, walk \u2014 disconnected same-circle arcs are typed no_join instead of silently merging across the gap); opJoin surfaces geometry-level declines as the typed join_failed code at the App API. (2) ARC EXTEND now uses directed interval semantics \u2014 the END extends CCW and the START extends BACKWARDS (CW) from the picked end; valid targets are restricted to the complementary arc (delta bounded by TAU \u2212 sweep), so a boundary crossing INSIDE the current sweep can never capture an end (the pre-fix defect that shortened/misoriented arcs); wrap-around angles stay exact on both ends. (3) The supported/unsupported surface is explicit: ROTATE R (Reference), SCALE R (Reference) and COPY M (Multiple placement) are typed declines at their input steps while the command keeps running (PromptStepOption.unsupported mechanism), and FILLET radius / CHAMFER distances echo the per-run persistence limitation in the command output. Directed regression coverage added: touching/overlap/reversed-direction JOIN with exact spans, gap JOIN rejections (two-piece, three-piece-missing-middle, reverse order, same-circle arcs), ARC EXTEND end-side and start-side directed tests with inside-sweep boundary crossings for both picked ends, wrap-around extension exactness, and the typed-decline command flows (ROTATE R then 45\u00b0, SCALE R then 2, COPY M then displacement, FILLET/CHAMFER persistence notes). Suite: 187 deterministic 2D tests (was 175) and the full app suite 596 tests with the 409-test regression baseline intact; web host lint/typecheck/build + the parity-fixture dev-server smoke green (save sha a48a29a8\u2026 unchanged); electron host typecheck/build + the 19-step real-UI workspace smoke green (the 14-step CAD-PARITY-002 parity workflow unchanged) + the engine-free/geometry/model/impact/drafting/BIM/docs smokes green locally (ifc/components smokes run in CI on the pinned ifcopenshell toolchain \u2014 the module is not installed in this sandbox, unchanged from the original submission).",
+      "produced_at": "2026-08-28T16:55:00Z",
+      "reproducible": true,
+      "reproduction": "cd app && node --import tsx --test test/workspace-2d-*.test.ts   # 187 tests; full suite: test/*.test.ts \u2192 596",
+      "references": {
+        "commit": "e1d2d4650875c190a8f6c0fb9f4b69698283c4ca",
+        "pr": 79
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "id": "DEC-001",
+      "status": "changes_requested",
+      "decided_at": "2026-08-28T16:25:00Z",
+      "decided_by": "pectoraux",
+      "role": "architect",
+      "rationale": "Architect review of CAD-PARITY-003 / PR #79 (comment 5454974593): the frozen architecture remains sound and the CI/test evidence is strong, but two real semantic defects in the canonical geometry kernel must be fixed before approval. (1) joinLines accepts any collinear lines and takes the min/max projected endpoints \u2014 two lines with a gap become one longer line, fabricating geometry and violating the requirement that modify operations operate on canonical geometry without inventing geometry. (2) extendGeom's ARC start-side path searches CCW from the current start and reconstructs the arc from that hit, which can move the start in the wrong direction and shorten or misorient the arc. Additionally, the currently documented omissions (e.g. ROTATE/SCALE reference mode and advanced repeat/persistence behaviors) must be represented explicitly as supported/unsupported command behavior with typed failures rather than presented as complete parity. The formal GitHub REQUEST_CHANGES operation was rejected because the connected account is the PR author, so the review is recorded as the authoritative PR comment instead. No architecture change is required.",
+      "evidence_refs": [
+        "EV-001",
+        "EV-002",
+        "EV-003"
+      ],
+      "remediation_required": "Fix the geometry semantics (JOIN must reject disconnected geometry; ARC EXTEND must use directed interval handling for both picked ends), add directed regression tests, rerun the complete 2D + regression + Web/Electron parity suite, update the governance evidence, and return PR #79 for review."
     }
   ]
 }
