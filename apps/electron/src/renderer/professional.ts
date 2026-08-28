@@ -1,13 +1,20 @@
 /**
  * CAD-PARITY-002 professional workspace — Electron renderer module
  * (Issue #75; CAD/BIM Product Architecture v1.0 FROZEN under
- * ConstructionOS Architecture v1.1).
+ * ConstructionOS Architecture v1.1), extended for CAD-PARITY-003
+ * (Issue #78): the canonical 2D entity vocabulary (ellipse/spline/point/
+ * ray/xline/region + both storage conventions through the geometry bridge),
+ * the merged canonical entity picking, the entityPoint step dispatch, the
+ * shared precision snapping and the rubber-band command previews — mirroring
+ * the Web host 1:1 so both hosts present the SAME command surface and
+ * semantics (LOCK-004).
  *
  * Adds the professional shell to the Electron host: application menu bar,
- * command-driven 2D Model canvas (SVG plan viewport with crosshair, snap
- * markers, ortho/polar rubber bands, window/crossing selection, cycling,
- * grips), command line with prompt state + history, status bar with
- * drafting-aid toggles, command palette (Ctrl+K) and the keyboard map.
+ * ribbon/tool palette, command-driven 2D Model canvas (SVG plan viewport
+ * with crosshair, snap markers, ortho/polar rubber bands, window/crossing
+ * selection, cycling, grips), command line with prompt state + history,
+ * status bar with drafting-aid toggles, command palette (Ctrl+K), a
+ * properties readout and the keyboard map.
  *
  * EVERYTHING routes through the SAME shared workspace core the Web host
  * uses (`@offisos/cad-app-shell/workspace` — bundled at build time; pure,
@@ -23,19 +30,38 @@
 import type { Command, CommandQueryResponse, Query } from "@offisos/cad-app-shell/contracts/app-api";
 import type { CADDocumentSnapshot, Element, LayerRecord } from "@offisos/cad-app-shell/contracts/caddocument";
 import type { Vec2 } from "@offisos/cad-app-shell/drafting/precision";
-import { resolveSnap } from "@offisos/cad-app-shell/drafting/snap";
 import { elementToDraftEntity, isDraftingElement, type DraftEntity } from "@offisos/cad-app-shell/drafting/entities";
 import {
   IDLE_PROMPT_STATE,
   applyPromptEvent,
   describePrompt,
+  effectiveStep,
+  optionValue,
   type PromptEngineState,
 } from "@offisos/cad-app-shell/workspace/prompt-engine";
+// CAD-PARITY-003: the SAME shared precision engine the Web host renderer and
+// the server-side precision queries run — parity by construction.
+import {
+  pickAt as pickAtGeom,
+  resolveSnap as resolveSnapPrecision,
+  selectWindow as selectWindowGeom,
+  toEntities,
+  type Entity as GeomEntity,
+  type OsnapMode,
+  type PrecisionSettings,
+} from "@offisos/cad-app-shell/workspace/precision-2d";
+import { arcSweep, bbox as geomBBox, closestOn, sampleSpline } from "@offisos/cad-app-shell/workspace/geometry/entities";
+import { mirrorGeom, rotateGeom, scaleGeom } from "@offisos/cad-app-shell/workspace/geometry/transform";
+import { offsetGeom } from "@offisos/cad-app-shell/workspace/geometry/offset";
+import { geomFromElement } from "@offisos/cad-app-shell/workspace/geometry/bridge";
+import { GEOM_LABEL, type Geom } from "@offisos/cad-app-shell/workspace/geometry/types";
+import type { Pt } from "@offisos/cad-app-shell/workspace/geometry/math2d";
 import {
   WORKSPACE_COMMANDS,
   commandById,
   resolveCommand,
   searchCommands,
+  type WorkspaceCommand,
 } from "@offisos/cad-app-shell/workspace/commands";
 import {
   applyPickModifier,
@@ -50,7 +76,7 @@ import {
 } from "@offisos/cad-app-shell/workspace";
 import { constrainCursor, DEFAULT_DRAFTING_AIDS, formatCoordinate, type DraftingAids } from "@offisos/cad-app-shell/workspace/feedback";
 import { mapKeyEvent } from "@offisos/cad-app-shell/workspace/keymap";
-import { defaultCommandContext, type CommandContext, type CommandPlan } from "@offisos/cad-app-shell/workspace/types";
+import { defaultCommandContext, type CommandContext, type CommandPlan, type PromptValue } from "@offisos/cad-app-shell/workspace/types";
 
 export interface ProfessionalOptions {
   /** The app root element (#app). */
@@ -91,6 +117,90 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLEle
   const e = document.createElement(tag);
   if (cls !== undefined) e.className = cls;
   return e;
+}
+
+// --- CAD-PARITY-003 canonical entity helpers (mirrors of the Web host) -------
+
+/** Visible world rectangle (viewport bounds in world units). */
+interface WorldRect {
+  readonly minX: number;
+  readonly minY: number;
+  readonly maxX: number;
+  readonly maxY: number;
+}
+
+/** The visible world rectangle of the pan/zoom view over the SVG viewport
+ *  (the pan origin is the world point at the screen (0, SVG_H) corner). */
+function visibleWorldRectOf(pan: { readonly x: number; readonly y: number }, zoom: number): WorldRect {
+  return {
+    minX: pan.x,
+    minY: pan.y,
+    maxX: pan.x + SVG_W / zoom,
+    maxY: pan.y + SVG_H / zoom,
+  };
+}
+
+/** Clip an infinite line (through `base` along unit `dir`) to the visible
+ *  world rectangle (Liang–Barsky). `halfLine` clamps t ≥ 0 (RAY). Returns
+ *  null when no part is visible. Deterministic — the SVG mirror of the Web
+ *  host's clipInfinite. */
+function clipInfinite(base: Pt, dir: Pt, rect: WorldRect, halfLine: boolean): readonly [Pt, Pt] | null {
+  let tMin = halfLine ? 0 : -Infinity;
+  let tMax = Infinity;
+  if (Math.abs(dir.x) <= 1e-12) {
+    if (base.x < rect.minX || base.x > rect.maxX) return null;
+  } else {
+    const t1 = (rect.minX - base.x) / dir.x;
+    const t2 = (rect.maxX - base.x) / dir.x;
+    tMin = Math.max(tMin, Math.min(t1, t2));
+    tMax = Math.min(tMax, Math.max(t1, t2));
+  }
+  if (Math.abs(dir.y) <= 1e-12) {
+    if (base.y < rect.minY || base.y > rect.maxY) return null;
+  } else {
+    const t1 = (rect.minY - base.y) / dir.y;
+    const t2 = (rect.maxY - base.y) / dir.y;
+    tMin = Math.max(tMin, Math.min(t1, t2));
+    tMax = Math.min(tMax, Math.max(t1, t2));
+  }
+  if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || !(tMax > tMin)) return null;
+  return [
+    { x: base.x + dir.x * tMin, y: base.y + dir.y * tMin },
+    { x: base.x + dir.x * tMax, y: base.y + dir.y * tMax },
+  ];
+}
+
+/** Unit direction of an infinite entity's defining pair. */
+function infiniteDir(g: Extract<Geom, { type: "ray" } | { type: "xline" }>): Pt {
+  const dx = g.x2 - g.x1;
+  const dy = g.y2 - g.y1;
+  const l = Math.hypot(dx, dy);
+  if (l <= 1e-9) return { x: 1, y: 0 };
+  return { x: dx / l, y: dy / l };
+}
+
+/** Representative bounds points of a canonical entity (ZOOMEXTENTS /
+ *  selection-bbox). Infinite entities contribute their defining points only
+ *  (not the draw extent); splines contribute their control points (the curve
+ *  lies inside the convex hull). Deterministic — mirrors the Web host. */
+function canonicalBoundsPoints(g: Geom): readonly Vec2[] {
+  switch (g.type) {
+    case "ray":
+    case "xline":
+      return [
+        [g.x1, g.y1],
+        [g.x2, g.y2],
+      ];
+    case "spline":
+      return g.controlPoints.map((p) => [p.x, p.y] as Vec2);
+    default: {
+      const bb = geomBBox(g);
+      return [
+        [bb.minX, bb.minY],
+        [bb.maxX, bb.maxY],
+      ];
+    }
+  }
 }
 
 const PRO_CSS = `
@@ -134,6 +244,17 @@ const PRO_CSS = `
 .pro-palette li button .aliases { color:var(--muted); font-size:10px; }
 .pro-palette li button .desc { margin-left:auto; color:var(--muted); font-size:10px; max-width:46%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .pro-palette li.sel button, .pro-palette li button:hover { background:#f1f5f9; }
+.pro-ribbon { display:flex; align-items:stretch; gap:14px; border-bottom:1px solid var(--border); padding:4px 10px; background:var(--bg); overflow-x:auto; }
+.pro-ribbon-group { display:flex; flex-direction:column; gap:2px; }
+.pro-ribbon-label { font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); text-align:center; }
+.pro-ribbon-buttons { display:flex; gap:2px; }
+.pro-ribbon-tool { border:1px solid transparent; background:transparent; font-size:11px; padding:3px 7px; border-radius:4px; cursor:pointer; white-space:nowrap; }
+.pro-ribbon-tool:hover { background:#f1f5f9; border-color:var(--border); }
+.pro-props { position:absolute; top:8px; left:8px; z-index:15; max-width:280px; background:rgba(255,255,255,.96); border:1px solid var(--border); border-radius:6px; padding:6px 10px; font-size:11px; line-height:1.5; box-shadow:0 4px 12px rgba(15,23,42,.12); display:none; }
+.pro-props .t { font-weight:700; margin-bottom:2px; }
+.pro-props .row { display:flex; gap:10px; justify-content:space-between; }
+.pro-props .row .k { color:var(--muted); }
+.pro-props .row .v { font-family:ui-monospace,monospace; }
 `;
 
 /** Public driver surface (used by test/smoke-workspace.mjs — the SAME code
@@ -146,6 +267,10 @@ export interface ProfessionalDriver {
   setSelection(ids: string[]): Promise<void>;
   refresh(): Promise<void>;
   commandLog(): string[];
+  /** CAD-PARITY-003: the current view transform (pan/zoom) — the driver the
+   *  smoke uses to compute synthetic canvas clicks at world points through
+   * the SAME screen mapping the real pointer handler applies. */
+  viewTransform(): { pan: { x: number; y: number }; zoom: number; width: number; height: number };
   status(): {
     prompt: string | null;
     commandName: string | null;
@@ -432,6 +557,62 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
 
   opts.root.insertBefore(menuBar, opts.root.firstChild);
 
+  // --- CAD-PARITY-003 ribbon / tool palette (mirrors the Web ToolPalette groups) ----------
+
+  const ribbon = h("div", "pro-ribbon");
+  ribbon.setAttribute("role", "toolbar");
+  ribbon.setAttribute("aria-label", "draw and modify tools");
+  ribbon.setAttribute("data-testid", "pro-ribbon");
+  const RIBBON_GROUPS: readonly { label: string; ids: readonly string[] }[] = [
+    {
+      label: "Draw",
+      ids: ["line", "polyline", "circle", "arc", "rectangle", "ellipse", "spline", "point", "ray", "xline", "region"],
+    },
+    { label: "Annotate", ids: ["dimlinear", "dimradius"] },
+    { label: "BIM", ids: ["story", "wall", "slab", "door", "window"] },
+    {
+      label: "Modify",
+      ids: [
+        "move",
+        "copy",
+        "rotate",
+        "scale",
+        "mirror",
+        "offset",
+        "trim",
+        "extend",
+        "stretch",
+        "fillet",
+        "chamfer",
+        "break",
+        "join",
+        "explode",
+        "erase",
+      ],
+    },
+  ];
+  for (const group of RIBBON_GROUPS) {
+    const g = h("div", "pro-ribbon-group");
+    const label = h("span", "pro-ribbon-label");
+    label.textContent = group.label;
+    const buttons = h("div", "pro-ribbon-buttons");
+    for (const id of group.ids) {
+      const tool = commandById(id);
+      if (tool === null) continue;
+      const b = h("button", "pro-ribbon-tool");
+      b.type = "button";
+      b.textContent = tool.label;
+      b.title = `${tool.name} (${tool.aliases.join(", ")}) — ${tool.description}`;
+      b.setAttribute("data-testid", `pro-tool-${id}`);
+      b.setAttribute("aria-label", tool.name);
+      b.addEventListener("click", () => void startCommand(id));
+      buttons.append(b);
+    }
+    g.append(label, buttons);
+    ribbon.append(g);
+  }
+  opts.root.insertBefore(ribbon, menuBar.nextSibling);
+
   // --- Model canvas (drafting mode card) ---------------------------------------------
 
   const modelCard = h("div", "pro-model-card");
@@ -459,6 +640,14 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
   miniToolbar.setAttribute("role", "toolbar");
   miniToolbar.setAttribute("aria-label", "selection actions");
   modelBody.append(miniToolbar);
+
+  // CAD-PARITY-003: canonical entity type/geometry readout for the single
+  // selection (mirrors the Web PropertiesPanel canonical rows).
+  const propsPanel = h("div", "pro-props");
+  propsPanel.setAttribute("data-testid", "pro-properties");
+  propsPanel.setAttribute("role", "region");
+  propsPanel.setAttribute("aria-label", "selection properties");
+  modelBody.append(propsPanel);
   const miniMove = h("button");
   miniMove.textContent = "Move";
   const miniCopy = h("button");
@@ -491,22 +680,19 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
     let maxX = -Infinity;
     let maxY = -Infinity;
     for (const el of elements) {
-      const entity = parseEntity(el);
       const pts: Vec2[] = [];
-      if (entity !== null) {
-        if (entity.type === "line") pts.push(entity.from, entity.to);
-        else if (entity.type === "polyline") pts.push(...entity.points);
-        else if (entity.type === "circle") {
-          pts.push([entity.center[0] - entity.radius, entity.center[1] - entity.radius], [entity.center[0] + entity.radius, entity.center[1] + entity.radius]);
-        } else if (entity.type === "rectangle") pts.push(entity.corner1, entity.corner2);
+      // CAD-PARITY-003: canonical bounds first (BOTH storage conventions
+      // decode through the bridge); BIM footprints next; annotations
+      // contribute no bounds (mirrors the Web host).
+      const geom = geomFromElement(el);
+      if (geom !== null) {
+        pts.push(...canonicalBoundsPoints(geom));
       } else {
         const props = el.props as Record<string, unknown>;
         if (props.type === "bim.wall" && Array.isArray(props.start) && Array.isArray(props.end)) {
           pts.push(props.start as unknown as Vec2, props.end as unknown as Vec2);
         } else if (props.type === "bim.slab" && Array.isArray(props.corner1) && Array.isArray(props.corner2)) {
           pts.push(props.corner1 as unknown as Vec2, props.corner2 as unknown as Vec2);
-        } else if (props.type === "bim.story") {
-          continue;
         } else {
           continue;
         }
@@ -547,27 +733,80 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
     });
   }
 
-  function constrainSnap(world: Vec2, shift: boolean): { point: Vec2; snapped: boolean } {
-    const cmd = commandById(state.engine.commandId ?? "");
-    const step = cmd !== null && cmd.steps.length > 0 ? (cmd.steps[state.engine.stepIndex] ?? null) : null;
-    let base: Vec2 | null = state.engine.lastPoint;
-    if (step !== null && step.baseStep !== undefined) {
-      const v = state.engine.values[step.baseStep];
-      if (v !== undefined && v.kind === "point") base = v.point;
-    }
+  function constrainSnap(
+    world: Vec2,
+    shift: boolean,
+    precomputed?: readonly GeomEntity[],
+  ): { point: Vec2; snapped: boolean; mode: OsnapMode | null } {
+    // The EFFECTIVE step is option-capture aware (CAD-PARITY-003) — the
+    // rubber base follows the paused step's baseStep exactly like the Web.
+    const step = effectiveStep(state.engine);
+    const base = stepBaseOf(step);
     const aids: DraftingAids = shift ? { ...state.aids, ortho: true } : state.aids;
     const constrained = constrainCursor(base, world, aids).point;
     const settings = state.snapshot?.draftingSettings;
-    if (settings?.snap.enabled !== true) return { point: constrained, snapped: false };
-    const r = resolveSnap({
-      point: constrained,
-      tolerance: settings.snap.tolerance,
-      kinds: settings.snap.kinds,
-      gridSize: settings.grid.size,
-      entities: visibleElements(),
-    });
-    if (r.best === null) return { point: constrained, snapped: false };
-    return { point: [r.best.point[0], r.best.point[1]], snapped: true };
+    if (settings?.snap.enabled !== true) return { point: constrained, snapped: false, mode: null };
+    // CAD-PARITY-003: the SAME shared precision engine the Web host and the
+    // App API precision queries run (parity by construction).
+    const geoms = precomputed ?? toEntities(visibleElements());
+    const r = resolveSnapPrecision(
+      geoms,
+      { x: constrained[0], y: constrained[1] },
+      precisionAids(),
+      base !== null ? { x: base[0], y: base[1] } : null,
+    );
+    if (r.mode === null) return { point: constrained, snapped: false, mode: null };
+    return { point: [r.point.x, r.point.y], snapped: true, mode: r.mode };
+  }
+
+  /** The rubber/preview base point of the effective step (baseStep value,
+   *  else the engine's lastPoint) — mirrors the Web stepBase. */
+  function stepBaseOf(step: { readonly baseStep?: string } | null): Vec2 | null {
+    if (step !== null && step.baseStep !== undefined) {
+      const v = state.engine.values[step.baseStep];
+      if (v !== undefined && v.kind === "point") return v.point;
+    }
+    return state.engine.lastPoint;
+  }
+
+  // CAD-PARITY-003 shared precision settings (CAD-2D-003): the professional
+  // default osnap mode set, the drafting-settings snap tolerance as aperture,
+  // ortho/polar from the host aids. Grid snapping stays off (grid is drawn
+  // but not snapped to) — the Web host's exact composition.
+  function precisionAids(): PrecisionSettings {
+    const settings = state.snapshot?.draftingSettings;
+    return {
+      osnapModes: ["endpoint", "midpoint", "center", "quadrant", "intersection", "node"],
+      ortho: state.aids.ortho,
+      polar: state.aids.polar,
+      polarAnglesDeg: [0, 45, 90, 135, 180, 225, 270, 315],
+      gridSnap: false,
+      gridSize: settings?.grid.size ?? 10,
+      aperture: settings?.snap.tolerance ?? 0.5,
+      tracking: false,
+    };
+  }
+
+  /** Deterministic merged pick (CAD-PARITY-003, mirror of the Web
+   *  pickEntityAt): the shared pickAt over the canonical entity view, merged
+   *  with the legacy hitTest (which also covers dimension annotations).
+   *  Closest distance wins; ties break by element id. */
+  function pickEntityAt(world: Vec2, geoms: readonly GeomEntity[], visible: readonly Element[]): { id: string; d: number } | null {
+    const aperture = 8 / state.zoom;
+    const probe = { x: world[0], y: world[1] };
+    const canonical = pickAtGeom(geoms, probe, aperture);
+    let canonicalBest: { id: string; d: number } | null = null;
+    if (canonical !== null) {
+      canonicalBest = { id: canonical.id, d: closestOn(canonical.geom, probe).d };
+    }
+    const legacyHits = hitTest(world, aperture, visible);
+    const legacyBest = legacyHits.length > 0 ? { id: legacyHits[0]!.id, d: legacyHits[0]!.distance } : null;
+    if (legacyBest === null) return canonicalBest;
+    if (canonicalBest === null) return legacyBest;
+    if (Math.abs(canonicalBest.d - legacyBest.d) <= 1e-12) {
+      return canonicalBest.id < legacyBest.id ? canonicalBest : legacyBest;
+    }
+    return canonicalBest.d < legacyBest.d ? canonicalBest : legacyBest;
   }
 
   // --- canvas pointer interaction ------------------------------------------------------------
@@ -588,7 +827,10 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
   }
 
   svg.addEventListener("mousedown", (e) => {
-    svg.focus();
+    // Focus for the canvas keymap WITHOUT scrolling — a canvas that extends
+    // past the viewport must not jump on click (also keeps synthetic-event
+    // client coordinates stable for the smoke driver).
+    svg.focus({ preventScroll: true });
     const world = svgPoint(e);
     if (e.button === 1) {
       dragKind = "pan";
@@ -621,35 +863,71 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
     }
 
     if (stepActive && cmd !== null) {
-      const step = cmd.steps[state.engine.stepIndex] ?? null;
+      // The EFFECTIVE step is option-capture aware (CAD-PARITY-003): while a
+      // FILLET R / OFFSET T sub-prompt is active, picks route through the
+      // sub-prompt, not the paused step — same as the Web host.
+      const step = effectiveStep(state.engine);
       if (step !== null && step.kind === "entity") {
-        const hits = hitTest(world, 8 / state.zoom, visibleElements());
-        const hit = hits.length > 0 ? (state.snapshot?.elements ?? []).find((el) => el.id === hits[0]!.id) : undefined;
+        const visible = visibleElements();
+        const picked = pickEntityAt(world, toEntities(visible), visible);
+        const hit = picked !== null ? (state.snapshot?.elements ?? []).find((el) => el.id === picked.id) : undefined;
         if (hit !== undefined) {
           void dispatchEngine({ type: "entity", entity: { id: hit.id, kind: hit.kind, props: hit.props as Record<string, unknown> } });
         }
-        return;
+        return; // miss: the prompt stays (the command line shows guidance)
+      }
+      // CAD-PARITY-003 entityPoint step: pick the object under the cursor AND
+      // dispatch the RAW world point — the pick location is semantic for
+      // TRIM/EXTEND/FILLET/CHAMFER/BREAK (no snap constraint applies to it).
+      if (step !== null && step.kind === "entityPoint") {
+        const visible = visibleElements();
+        const picked = pickEntityAt(world, toEntities(visible), visible);
+        if (picked !== null) {
+          const hit = (state.snapshot?.elements ?? []).find((el) => el.id === picked.id);
+          if (hit !== undefined) {
+            void dispatchEngine({
+              type: "entityPoint",
+              entity: { id: hit.id, kind: hit.kind, props: hit.props as Record<string, unknown> },
+              point: [world[0], world[1]],
+            });
+          }
+        }
+        return; // miss: the prompt stays
       }
       const { point } = constrainSnap(world, e.shiftKey);
       void dispatchEngine({ type: "pick", point });
       return;
     }
 
-    // Selection mode.
-    const hits = hitTest(world, 8 / state.zoom, visibleElements());
-    if (hits.length > 0) {
-      const now = Date.now();
-      let chosen = hits[0]!.id;
-      let index = 0;
-      if (lastClick !== null && now - lastClick.at < 700) {
-        const cycled = cyclePick(world, 8 / state.zoom, visibleElements(), lastClick.index);
-        if (cycled !== null) {
-          chosen = cycled.id;
-          index = cycled.index;
+    // Selection mode — the merged canonical + legacy pick (CAD-PARITY-003).
+    const visible = visibleElements();
+    const geoms = toEntities(visible);
+    const picked = pickEntityAt(world, geoms, visible);
+    if (picked !== null) {
+      const hits = hitTest(world, 8 / state.zoom, visible);
+      if (hits.length > 0 && hits[0]!.id === picked.id) {
+        // Legacy pickability — stacked-hit cycling preserved.
+        const now = Date.now();
+        let chosen = hits[0]!.id;
+        let index = 0;
+        if (lastClick !== null && now - lastClick.at < 700) {
+          const cycled = cyclePick(world, 8 / state.zoom, visible, lastClick.index);
+          if (cycled !== null) {
+            chosen = cycled.id;
+            index = cycled.index;
+          }
         }
+        lastClick = { screen: [e.clientX, e.clientY], at: now, index };
+        const next = applyPickModifier(state.selection, chosen, e.shiftKey ? "toggle" : "replace");
+        void command("document.setSelection", { ids: next }).then(() => {
+          state.selection = [...next];
+          renderModel();
+        });
+        return;
       }
-      lastClick = { screen: [e.clientX, e.clientY], at: now, index };
-      const next = applyPickModifier(state.selection, chosen, e.shiftKey ? "toggle" : "replace");
+      // Canonical-only hit (ellipse/spline/point/ray/xline/region …).
+      lastClick = null;
+      const next = applyPickModifier(state.selection, picked.id, e.shiftKey ? "toggle" : "replace");
       void command("document.setSelection", { ids: next }).then(() => {
         state.selection = [...next];
         renderModel();
@@ -705,8 +983,21 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
         }
         return;
       }
-      const ids = windowSelect(rect, visibleElements());
-      const next = e.shiftKey ? Array.from(new Set([...state.selection, ...ids])) : ids;
+      const visible = visibleElements();
+      const ids = windowSelect(rect, visible);
+      // CAD-PARITY-003 canonical entities — the SAME window/crossing
+      // semantics as the shared precision engine (legacy ids stay first,
+      // deterministic document order for the new ones).
+      const canonicalIds = selectWindowGeom(toEntities(visible), {
+        mode: rect.mode,
+        min: { x: rect.min[0], y: rect.min[1] },
+        max: { x: rect.max[0], y: rect.max[1] },
+      });
+      const merged: string[] = [...ids];
+      for (const id of canonicalIds) {
+        if (!merged.includes(id)) merged.push(id);
+      }
+      const next = e.shiftKey ? Array.from(new Set([...state.selection, ...merged])) : merged;
       void command("document.setSelection", { ids: next }).then(() => {
         state.selection = [...next];
         renderModel();
@@ -741,6 +1032,467 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
     void dispatchEngine({ type: "enter" });
   });
 
+  // --- CAD-PARITY-003 canonical entity painting (SVG mirror of the Web draw.ts) --------------
+
+  const SELECTED_STROKE = "#0ea5e9";
+  const REGION_FILL = "rgba(13,148,136,0.10)";
+  const REGION_FILL_SELECTED = "rgba(14,165,233,0.16)";
+  const PREVIEW_AMBER = "#f59e0b";
+  const GHOST_STROKE = "rgba(14,165,233,0.55)";
+
+  interface GeomSvgStyle {
+    readonly stroke: string;
+    readonly width: number;
+    readonly dash: readonly number[] | null;
+    readonly fill: string | null;
+  }
+
+  function styleGeomElement(node: SVGElement, style: GeomSvgStyle, fill: boolean): void {
+    node.setAttribute("stroke", style.stroke);
+    node.setAttribute("stroke-width", String(style.width));
+    if (style.dash !== null) node.setAttribute("stroke-dasharray", style.dash.join(" "));
+    node.setAttribute("fill", fill && style.fill !== null ? style.fill : "none");
+  }
+
+  /** Paint one canonical Geom (shared by entity rendering, hover emphasis
+   *  and command previews — the SVG mirror of the Web paintGeom). */
+  function drawGeomSvg(g: Geom, style: GeomSvgStyle): void {
+    const s = (p: Pt): [number, number] => toScreen([p.x, p.y]);
+    switch (g.type) {
+      case "line": {
+        const l = svgNs("line");
+        const a = s({ x: g.x1, y: g.y1 });
+        const b = s({ x: g.x2, y: g.y2 });
+        l.setAttribute("x1", String(a[0])); l.setAttribute("y1", String(a[1]));
+        l.setAttribute("x2", String(b[0])); l.setAttribute("y2", String(b[1]));
+        styleGeomElement(l, style, false);
+        svg.append(l);
+        break;
+      }
+      case "polyline": {
+        if (g.vertices.length === 0) break;
+        const pl = svgNs("polyline");
+        pl.setAttribute("points", g.vertices.map((p) => s(p).join(",")).join(" "));
+        styleGeomElement(pl, style, true);
+        svg.append(pl);
+        break;
+      }
+      case "circle": {
+        if (g.r * state.zoom < 0.5) break;
+        const c = s({ x: g.cx, y: g.cy });
+        const el = svgNs("circle");
+        el.setAttribute("cx", String(c[0]));
+        el.setAttribute("cy", String(c[1]));
+        el.setAttribute("r", String(g.r * state.zoom));
+        styleGeomElement(el, style, true);
+        svg.append(el);
+        break;
+      }
+      case "arc": {
+        const sweep = arcSweep(g);
+        const p0: Pt = { x: g.cx + g.r * Math.cos(g.startAngle), y: g.cy + g.r * Math.sin(g.startAngle) };
+        const p1: Pt = { x: g.cx + g.r * Math.cos(g.endAngle), y: g.cy + g.r * Math.sin(g.endAngle) };
+        const s0 = s(p0);
+        const s1 = s(p1);
+        const path = svgNs("path");
+        // World CCW sweep stays visually CCW on screen (the screen transform
+        // flips Y) — SVG sweep-flag 0; large-arc when the sweep exceeds 180°.
+        path.setAttribute("d", `M ${s0[0]} ${s0[1]} A ${g.r * state.zoom} ${g.r * state.zoom} 0 ${sweep > Math.PI ? 1 : 0} 0 ${s1[0]} ${s1[1]}`);
+        styleGeomElement(path, style, false);
+        svg.append(path);
+        break;
+      }
+      case "ellipse": {
+        const c = s({ x: g.cx, y: g.cy });
+        const el = svgNs("ellipse");
+        el.setAttribute("cx", String(c[0]));
+        el.setAttribute("cy", String(c[1]));
+        el.setAttribute("rx", String(g.rx * state.zoom));
+        el.setAttribute("ry", String(g.ry * state.zoom));
+        // World rotation is CCW (Y up); the screen transform flips Y, so the
+        // SVG transform rotates by the NEGATED angle — the mirror of the
+        // Web host's ctx.ellipse rotation negation.
+        el.setAttribute("transform", `rotate(${(-g.rotation * 180) / Math.PI} ${c[0]} ${c[1]})`);
+        styleGeomElement(el, style, true);
+        svg.append(el);
+        break;
+      }
+      case "spline": {
+        const pts = sampleSpline(g, 32);
+        if (pts.length < 2) break;
+        const pl = svgNs("polyline");
+        pl.setAttribute("points", pts.map((p) => s(p).join(",")).join(" "));
+        styleGeomElement(pl, style, false);
+        svg.append(pl);
+        break;
+      }
+      case "point": {
+        const p = s({ x: g.x, y: g.y });
+        const l1 = svgNs("line");
+        l1.setAttribute("x1", String(p[0] - 3)); l1.setAttribute("y1", String(p[1]));
+        l1.setAttribute("x2", String(p[0] + 3)); l1.setAttribute("y2", String(p[1]));
+        styleGeomElement(l1, style, false);
+        const l2 = svgNs("line");
+        l2.setAttribute("x1", String(p[0])); l2.setAttribute("y1", String(p[1] - 3));
+        l2.setAttribute("x2", String(p[0])); l2.setAttribute("y2", String(p[1] + 3));
+        styleGeomElement(l2, style, false);
+        const dot = svgNs("circle");
+        dot.setAttribute("cx", String(p[0]));
+        dot.setAttribute("cy", String(p[1]));
+        dot.setAttribute("r", "1.5");
+        dot.setAttribute("fill", style.stroke);
+        svg.append(l1, l2, dot);
+        break;
+      }
+      case "ray":
+      case "xline": {
+        // Viewport-clipped (Liang–Barsky) — never an unbounded DOM node.
+        const seg = clipInfinite({ x: g.x1, y: g.y1 }, infiniteDir(g), visibleWorldRectOf(state.pan, state.zoom), g.type === "ray");
+        if (seg === null) break;
+        const l = svgNs("line");
+        const a = s(seg[0]);
+        const b = s(seg[1]);
+        l.setAttribute("x1", String(a[0])); l.setAttribute("y1", String(a[1]));
+        l.setAttribute("x2", String(b[0])); l.setAttribute("y2", String(b[1]));
+        styleGeomElement(l, style, false);
+        svg.append(l);
+        break;
+      }
+      case "region": {
+        // Translucent fill + boundary stroke (circle/ellipse/polyline kinds).
+        const b = g.boundary;
+        const boundary: Geom =
+          b.kind === "circle"
+            ? { type: "circle", cx: b.cx, cy: b.cy, r: b.r }
+            : b.kind === "ellipse"
+              ? { type: "ellipse", cx: b.cx, cy: b.cy, rx: b.rx, ry: b.ry, rotation: b.rotation }
+              : { type: "polyline", vertices: b.vertices, closed: true };
+        drawGeomSvg(boundary, style);
+        // Centroid marker (small cross).
+        const c = s(g.centroid);
+        for (const [x1, y1, x2, y2] of [
+          [c[0] - 4, c[1], c[0] + 4, c[1]],
+          [c[0], c[1] - 4, c[0], c[1] + 4],
+        ] as const) {
+          const m = svgNs("line");
+          m.setAttribute("x1", String(x1)); m.setAttribute("y1", String(y1));
+          m.setAttribute("x2", String(x2)); m.setAttribute("y2", String(y2));
+          m.setAttribute("stroke", style.stroke);
+          m.setAttribute("stroke-width", String(style.width));
+          m.setAttribute("stroke-opacity", "0.7");
+          svg.append(m);
+        }
+        break;
+      }
+    }
+  }
+
+  /** Draw a canonical CAD-PARITY-003 entity (any drafting element decoded
+   *  through the geometry bridge — BOTH storage conventions). Professional
+   *  conventions mirror the Web host: rays draw thin, construction lines
+   *  thin + dashed, regions fill translucent with a stroked boundary,
+   *  points draw as small crosses. */
+  function drawCanonicalEntity(geom: Geom, opts: { color: string; selected: boolean }): void {
+    const isConstruction = geom.type === "ray" || geom.type === "xline";
+    drawGeomSvg(geom, {
+      stroke: opts.selected ? SELECTED_STROKE : opts.color,
+      width: opts.selected ? 2.4 : isConstruction ? 1 : 1.6,
+      dash: geom.type === "xline" ? [6, 4] : null,
+      fill: geom.type === "region" ? (opts.selected ? REGION_FILL_SELECTED : REGION_FILL) : null,
+    });
+  }
+
+  /** Emphasize an entity (hover highlight before a pick, or a picked target
+   *  during FILLET/CHAMFER/BREAK): a thicker amber stroke over the geometry. */
+  function drawGeomEmphasis(g: Geom): void {
+    drawGeomSvg(g, {
+      stroke: PREVIEW_AMBER,
+      width: 3,
+      dash: null,
+      fill: g.type === "region" ? "rgba(245,158,11,0.14)" : null,
+    });
+  }
+
+  /** Snap marker at a snap point — mode-aware shapes in the professional
+   *  osnap vocabulary (mirror of the Web drawSnapMarker). The default keeps
+   *  the CAD-PARITY-002 square marker. */
+  function drawSnapMarkerSvg(screen: [number, number], mode: OsnapMode | null): void {
+    const r = 5;
+    const x = screen[0];
+    const y = screen[1];
+    const stroke: GeomSvgStyle = { stroke: "#0d9488", width: 1.6, dash: null, fill: null };
+    const crossLine = (x1: number, y1: number, x2: number, y2: number): void => {
+      const l = svgNs("line");
+      l.setAttribute("x1", String(x1)); l.setAttribute("y1", String(y1));
+      l.setAttribute("x2", String(x2)); l.setAttribute("y2", String(y2));
+      styleGeomElement(l, stroke, false);
+      svg.append(l);
+    };
+    switch (mode) {
+      case "midpoint": {
+        const p = svgNs("polygon");
+        p.setAttribute("points", `${x - r},${y + r * 0.7} ${x},${y - r} ${x + r},${y + r * 0.7}`);
+        styleGeomElement(p, stroke, false);
+        svg.append(p);
+        break;
+      }
+      case "center": {
+        const c = svgNs("circle");
+        c.setAttribute("cx", String(x)); c.setAttribute("cy", String(y)); c.setAttribute("r", String(r));
+        styleGeomElement(c, stroke, false);
+        svg.append(c);
+        break;
+      }
+      case "quadrant": {
+        const p = svgNs("polygon");
+        p.setAttribute("points", `${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`);
+        styleGeomElement(p, stroke, false);
+        svg.append(p);
+        break;
+      }
+      case "intersection":
+        crossLine(x - r, y - r, x + r, y + r);
+        crossLine(x + r, y - r, x - r, y + r);
+        break;
+      case "node":
+        crossLine(x - r, y - r, x + r, y + r);
+        crossLine(x + r, y - r, x - r, y + r);
+        crossLine(x - r, y, x + r, y);
+        crossLine(x, y - r, x, y + r);
+        break;
+      default: {
+        // endpoint / perpendicular / tangent / nearest / unknown — the
+        // CAD-PARITY-002 square marker.
+        const m = svgNs("rect");
+        m.setAttribute("x", String(x - r)); m.setAttribute("y", String(y - r));
+        m.setAttribute("width", String(r * 2)); m.setAttribute("height", String(r * 2));
+        styleGeomElement(m, stroke, false);
+        svg.append(m);
+        break;
+      }
+    }
+  }
+
+  // --- CAD-PARITY-003 rubber-band command previews (mirror of the Web drawCommandPreview) ------
+
+  function previewPointValue(id: string): Pt | null {
+    const v = state.engine.values[id];
+    return v !== undefined && v.kind === "point" ? { x: v.point[0], y: v.point[1] } : null;
+  }
+
+  function previewPointsValue(id: string): readonly Pt[] {
+    const v = state.engine.values[id];
+    return v !== undefined && v.kind === "points" ? v.points.map((p) => ({ x: p[0], y: p[1] })) : [];
+  }
+
+  function previewEntityIds(id: string): readonly string[] {
+    const v = state.engine.values[id];
+    return v !== undefined && v.kind === "entities" ? v.entities.map((e) => e.id) : [];
+  }
+
+  function previewEntityPointIds(id: string): readonly string[] {
+    const v = state.engine.values[id];
+    return v !== undefined && v.kind === "entityPoints" ? v.picks.map((p) => p.entity.id) : [];
+  }
+
+  /** Live preview for the CAD-PARITY-003 commands — ghost geometry, axis
+   *  lines, live entities and picked-object emphasis. Dashed amber rubber
+   *  lines + translucent blue ghosts; deterministic per
+   *  (command, values, cursor). SVG mirror of the Web drawCommandPreview. */
+  function drawCommandPreview(cmd: WorkspaceCommand, geoms: readonly GeomEntity[], geomById: Map<string, GeomEntity>): void {
+    if (state.cursor === null) return;
+    const values: Readonly<Record<string, PromptValue>> = state.engine.values;
+    const cursor: Pt = { x: state.cursor[0], y: state.cursor[1] };
+    const rubber: GeomSvgStyle = { stroke: PREVIEW_AMBER, width: 1.4, dash: [5, 4], fill: null };
+    const ghost: GeomSvgStyle = { stroke: GHOST_STROKE, width: 1.2, dash: [5, 4], fill: null };
+    const drawLine = (a: Pt, b: Pt, style: GeomSvgStyle): void =>
+      drawGeomSvg({ type: "line", x1: a.x, y1: a.y, x2: b.x, y2: b.y }, style);
+    const drawInfinite = (a: Pt, b: Pt, style: GeomSvgStyle): void => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const l = Math.hypot(dx, dy);
+      if (l <= 1e-9) return;
+      const seg = clipInfinite(a, { x: dx / l, y: dy / l }, visibleWorldRectOf(state.pan, state.zoom), false);
+      if (seg === null) return;
+      drawLine(seg[0], seg[1], style);
+    };
+    const drawGhost = (g: Geom): void => {
+      drawGeomSvg(g, ghost);
+    };
+    const echo = (text: string): void => {
+      const s = toScreen([cursor.x, cursor.y]);
+      const t = svgNs("text");
+      t.setAttribute("x", String(s[0] + 14));
+      t.setAttribute("y", String(s[1] - 10));
+      t.setAttribute("fill", "#b45309");
+      t.setAttribute("font-size", "11");
+      t.setAttribute("font-family", "ui-monospace, monospace");
+      t.textContent = text;
+      svg.append(t);
+    };
+    // Canonical geometry of the objects the running command will modify —
+    // the collected object picks, or the current selection.
+    const targetGeoms = (): readonly Geom[] => {
+      const objects = values.objects;
+      const ids =
+        objects !== undefined && objects.kind === "entities"
+          ? objects.entities.map((e) => e.id)
+          : state.selection;
+      const out: Geom[] = [];
+      for (const id of ids) {
+        const g = geomById.get(id)?.geom;
+        if (g !== undefined) out.push(g);
+      }
+      return out;
+    };
+
+    switch (cmd.id) {
+      case "ellipse": {
+        const center = previewPointValue("center");
+        if (center === null) break;
+        const axisEnd = previewPointValue("axisEnd");
+        if (axisEnd === null) {
+          // First axis under construction: base → cursor axis line.
+          drawLine(center, cursor, { ...rubber, dash: null });
+          break;
+        }
+        const axisX = axisEnd.x - center.x;
+        const axisY = axisEnd.y - center.y;
+        const rx = Math.hypot(axisX, axisY);
+        if (rx <= 1e-9) break;
+        const u = { x: axisX / rx, y: axisY / rx };
+        const rel = { x: cursor.x - center.x, y: cursor.y - center.y };
+        const ry = Math.abs(rel.x * u.y - rel.y * u.x);
+        // Committed axis (thin) + live ellipse (dashed rubber).
+        drawLine(center, axisEnd, { ...rubber, dash: null, width: 1 });
+        if (ry > 1e-9) {
+          drawGhost({ type: "ellipse", cx: center.x, cy: center.y, rx, ry, rotation: Math.atan2(axisY, axisX) });
+        }
+        break;
+      }
+      case "spline": {
+        const start = previewPointValue("start");
+        const pts: Pt[] = [];
+        if (start !== null) pts.push(start);
+        pts.push(...previewPointsValue("next"));
+        if (pts.length === 0) break;
+        // Live control polygon (collected points + cursor).
+        drawGhost({ type: "polyline", vertices: [...pts, cursor], closed: false });
+        // Sampled curve preview.
+        const control = [...pts, cursor];
+        if (control.length >= 2) {
+          drawGhost({
+            type: "spline",
+            controlPoints: control,
+            degree: Math.min(3, control.length - 1),
+          });
+        }
+        break;
+      }
+      case "point": {
+        // Crosshair marker at the prospective node position.
+        drawGhost({ type: "point", x: cursor.x, y: cursor.y });
+        break;
+      }
+      case "ray":
+      case "xline": {
+        const base = previewPointValue("base");
+        if (base === null) break;
+        // Infinite dashed construction line through base → cursor.
+        drawInfinite(base, cursor, rubber);
+        break;
+      }
+      case "rotate": {
+        const base = previewPointValue("base");
+        if (base === null) break;
+        const dx = cursor.x - base.x;
+        const dy = cursor.y - base.y;
+        if (Math.hypot(dx, dy) <= 1e-9) break;
+        const angle = Math.atan2(dy, dx);
+        for (const g of targetGeoms()) drawGhost(rotateGeom(g, base, angle));
+        echo(`${(((angle * 180) / Math.PI + 360) % 360).toFixed(1)}°`);
+        break;
+      }
+      case "scale": {
+        const base = previewPointValue("base");
+        if (base === null) break;
+        const factor = Math.hypot(cursor.x - base.x, cursor.y - base.y) / 100;
+        if (factor > 1e-9) {
+          for (const g of targetGeoms()) drawGhost(scaleGeom(g, base, factor));
+        }
+        echo(`×${factor.toFixed(2)}`);
+        break;
+      }
+      case "mirror": {
+        const p1 = previewPointValue("p1");
+        if (p1 === null) break;
+        const p2v = previewPointValue("p2");
+        const p2: Pt = p2v !== null ? p2v : cursor;
+        if (Math.hypot(p2.x - p1.x, p2.y - p1.y) <= 1e-9) break;
+        // Mirror axis (dashed, extended to the viewport bounds).
+        drawInfinite(p1, p2, rubber);
+        for (const g of targetGeoms()) drawGhost(mirrorGeom(g, p1, p2));
+        break;
+      }
+      case "offset": {
+        const ids = previewEntityIds("object");
+        const target = ids.length > 0 ? (geomById.get(ids[0]!)?.geom ?? null) : null;
+        if (target === null) break;
+        const throughOpt = optionValue(values, "distance", "T");
+        const through = throughOpt !== null && throughOpt.kind === "point";
+        let distance = 0;
+        if (through) {
+          // Through mode: the cursor IS the through point.
+          distance = closestOn(target, cursor).d;
+        } else {
+          const d = values.distance;
+          distance = d !== undefined && d.kind === "number" ? d.value : 0;
+        }
+        if (!(distance > 1e-9)) break;
+        try {
+          drawGhost(offsetGeom(target, distance, cursor));
+        } catch {
+          // Typed kernel limitation (ellipse/spline offsets) — no preview.
+        }
+        break;
+      }
+      case "stretch": {
+        const c1 = previewPointValue("corner1");
+        if (c1 === null) break;
+        // Crossing window while picking corners (dashed green).
+        const a = toScreen([c1.x, c1.y]);
+        const b = toScreen([cursor.x, cursor.y]);
+        const r = svgNs("rect");
+        r.setAttribute("x", String(Math.min(a[0], b[0])));
+        r.setAttribute("y", String(Math.min(a[1], b[1])));
+        r.setAttribute("width", String(Math.abs(b[0] - a[0])));
+        r.setAttribute("height", String(Math.abs(b[1] - a[1])));
+        r.setAttribute("stroke", "#16a34a");
+        r.setAttribute("stroke-width", "1");
+        r.setAttribute("stroke-dasharray", "4 3");
+        r.setAttribute("fill", "rgba(22,163,74,0.08)");
+        svg.append(r);
+        break;
+      }
+      case "fillet":
+      case "chamfer": {
+        // Emphasize the first picked object while the second is selected.
+        const ids = previewEntityPointIds("first");
+        const target = ids.length > 0 ? (geomById.get(ids[0]!)?.geom ?? null) : null;
+        if (target !== null) drawGeomEmphasis(target);
+        break;
+      }
+      case "break": {
+        const ids = previewEntityPointIds("object");
+        const target = ids.length > 0 ? (geomById.get(ids[0]!)?.geom ?? null) : null;
+        if (target !== null) drawGeomEmphasis(target);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   // --- model rendering -----------------------------------------------------------------------
 
   function renderModel(): void {
@@ -772,8 +1524,27 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
     const selectedSet = new Set(state.selection);
     const layerById = new Map<string, LayerRecord>((state.snapshot?.layers ?? []).map((l: LayerRecord) => [l.id, l] as const));
 
-    for (const el of visibleElements()) {
+    const visible = visibleElements();
+    // CAD-PARITY-003: the canonical entity view over BOTH storage
+    // conventions (the SAME module the server-side precision queries run).
+    const geoms = toEntities(visible);
+    const geomById = new Map<string, GeomEntity>(geoms.map((e) => [e.id, e] as const));
+
+    for (const el of visible) {
       const selected = selectedSet.has(el.id);
+      // CAD-PARITY-003: canonical geometry first — the SAME bridge painter
+      // the Web host uses (ellipse/spline/point/ray/xline/region + the
+      // classic types in BOTH conventions); annotations (dims) fall through
+      // to the legacy painter below.
+      const canonical = geomById.get(el.id);
+      if (canonical !== undefined) {
+        const layer = layerById.get(canonical.layer);
+        drawCanonicalEntity(canonical.geom, {
+          color: canonical.color ?? layer?.color ?? "#111827",
+          selected,
+        });
+        continue;
+      }
       const entity = parseEntity(el);
       if (entity !== null) {
         const layer = layerById.get(entity.layer);
@@ -886,32 +1657,42 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
       }
     }
 
-    // Rubber band for the active point step.
+    // CAD-PARITY-003 command previews (ghost geometry, axis lines, live
+    // entities, echo readouts) + hover emphasis during object picks.
     const cmd = commandById(state.engine.commandId ?? "");
-    if (cmd !== null && state.cursor !== null && cmd.steps.length > 0) {
-      const step = cmd.steps[state.engine.stepIndex] ?? null;
-      if (step !== null && (step.kind === "point" || step.kind === "distance" || step.kind === "displacement") && state.engine.lastPoint !== null) {
-        const from = toScreen(state.engine.lastPoint);
-        const to = toScreen(constrainSnap(state.cursor, false).point);
-        const l = svgNs("line");
-        l.setAttribute("x1", String(from[0])); l.setAttribute("y1", String(from[1]));
-        l.setAttribute("x2", String(to[0])); l.setAttribute("y2", String(to[1]));
-        l.setAttribute("stroke", "#f59e0b");
-        l.setAttribute("stroke-dasharray", "6 4");
-        l.setAttribute("stroke-width", "1.4");
-        svg.append(l);
-        const snapPoint = constrainSnap(state.cursor, false);
-        if (snapPoint.snapped) {
-          const m = svgNs("rect");
-          const s = toScreen(snapPoint.point);
-          m.setAttribute("x", String(s[0] - 5)); m.setAttribute("y", String(s[1] - 5));
-          m.setAttribute("width", "10"); m.setAttribute("height", "10");
-          m.setAttribute("fill", "none");
-          m.setAttribute("stroke", "#0d9488");
-          m.setAttribute("stroke-width", "1.6");
-          svg.append(m);
+    const step = effectiveStep(state.engine);
+    if (cmd !== null && step !== null && state.cursor !== null) {
+      if (step.kind === "entity" || step.kind === "entityPoint") {
+        // Hover emphasis: highlight the entity under the cursor before the
+        // pick (TRIM/EXTEND/BREAK target feedback).
+        const hovered = pickEntityAt(state.cursor, geoms, visible);
+        if (hovered !== null) {
+          const g = geomById.get(hovered.id)?.geom;
+          if (g !== undefined) drawGeomEmphasis(g);
         }
       }
+      drawCommandPreview(cmd, geoms, geomById);
+    }
+
+    // Rubber band for the active point/distance/displacement step.
+    if (cmd !== null && step !== null && state.cursor !== null && stepBaseOf(step) !== null &&
+        (step.kind === "point" || step.kind === "distance" || step.kind === "displacement")) {
+      const base = stepBaseOf(step);
+      const from = toScreen(base!);
+      const to = toScreen(constrainSnap(state.cursor, false, geoms).point);
+      const l = svgNs("line");
+      l.setAttribute("x1", String(from[0])); l.setAttribute("y1", String(from[1]));
+      l.setAttribute("x2", String(to[0])); l.setAttribute("y2", String(to[1]));
+      l.setAttribute("stroke", "#f59e0b");
+      l.setAttribute("stroke-dasharray", "6 4");
+      l.setAttribute("stroke-width", "1.4");
+      svg.append(l);
+    }
+
+    // Snap marker (mode-aware shapes — mirrors the Web drawSnapMarker).
+    if (cmd !== null && step !== null && state.cursor !== null) {
+      const snap = constrainSnap(state.cursor, false, geoms);
+      if (snap.snapped) drawSnapMarkerSvg(toScreen(snap.point), snap.mode);
     }
 
     // Selection rectangle.
@@ -972,6 +1753,95 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
       ly.setAttribute("stroke-width", "1");
       svg.append(lx, ly);
     }
+
+    renderProperties(geomById);
+  }
+
+  // --- CAD-PARITY-003 properties readout (mirrors the Web PropertiesPanel rows) ----------------
+
+  function renderProperties(geomById: Map<string, GeomEntity>): void {
+    while (propsPanel.firstChild) propsPanel.removeChild(propsPanel.firstChild);
+    const el =
+      state.selection.length === 1
+        ? (state.snapshot?.elements ?? []).find((x) => x.id === state.selection[0])
+        : undefined;
+    if (el === undefined) {
+      propsPanel.style.display = "none";
+      return;
+    }
+    const p = el.props as Record<string, unknown>;
+    const canonical = geomById.get(el.id)?.geom ?? null;
+    const num = (v: number): string => String(Number(v.toFixed(3)));
+    const row = (k: string, v: string): void => {
+      const d = h("div", "row");
+      const kEl = h("span", "k");
+      kEl.textContent = k;
+      const vEl = h("span", "v");
+      vEl.textContent = v;
+      d.append(kEl, vEl);
+      propsPanel.append(d);
+    };
+    const title = h("div", "t");
+    title.textContent =
+      canonical !== null
+        ? GEOM_LABEL[canonical.type]
+        : typeof p.type === "string"
+          ? p.type
+          : el.kind;
+    const idSpan = h("span");
+    idSpan.textContent = ` · ${el.id}`;
+    title.append(idSpan);
+    propsPanel.append(title);
+    if (typeof p.layer === "string") row("layer", p.layer);
+    const g = canonical;
+    if (g !== null) {
+      switch (g.type) {
+        case "ellipse":
+          row("axes", `${num(g.rx)} × ${num(g.ry)}`);
+          row("rotation", `${num((g.rotation * 180) / Math.PI)}°`);
+          row("center", `${num(g.cx)}, ${num(g.cy)}`);
+          break;
+        case "spline":
+          row("control points", String(g.controlPoints.length));
+          row("degree", String(g.degree));
+          break;
+        case "point":
+          row("position", `${num(g.x)}, ${num(g.y)}`);
+          break;
+        case "ray":
+        case "xline": {
+          const dirDeg = (Math.atan2(g.y2 - g.y1, g.x2 - g.x1) * 180) / Math.PI + 360;
+          row("base", `${num(g.x1)}, ${num(g.y1)}`);
+          row("through", `${num(g.x2)}, ${num(g.y2)}`);
+          row("direction", `${num(dirDeg % 360)}°`);
+          break;
+        }
+        case "region":
+          row("boundary", g.boundary.kind);
+          row("area", num(g.area));
+          row("perimeter", num(g.perimeter));
+          row("centroid", `${num(g.centroid.x)}, ${num(g.centroid.y)}`);
+          break;
+        case "line":
+          row("from", `${num(g.x1)}, ${num(g.y1)}`);
+          row("to", `${num(g.x2)}, ${num(g.y2)}`);
+          break;
+        case "circle":
+          row("center", `${num(g.cx)}, ${num(g.cy)}`);
+          row("radius", num(g.r));
+          break;
+        case "arc":
+          row("center", `${num(g.cx)}, ${num(g.cy)}`);
+          row("radius", num(g.r));
+          row("sweep", `${num((((g.endAngle - g.startAngle) * 180) / Math.PI + 360) % 360)}°`);
+          break;
+        case "polyline":
+          row("vertices", String(g.vertices.length));
+          row("closed", g.closed ? "yes" : "no");
+          break;
+      }
+    }
+    propsPanel.style.display = "block";
   }
 
   // --- command line + status bar ------------------------------------------------------------
@@ -1212,6 +2082,7 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
   function syncMode(): void {
     const drafting = opts.getMode() === "drafting";
     modelCard.style.display = drafting ? "" : "none";
+    ribbon.style.display = drafting ? "" : "none";
   }
   const modeObserver = new MutationObserver(syncMode);
   modeObserver.observe(opts.root, { subtree: true, attributes: true, attributeFilter: ["aria-pressed"] });
@@ -1246,6 +2117,9 @@ export function mountProfessionalWorkspace(opts: ProfessionalOptions): Professio
     },
     commandLog(): string[] {
       return [...commandLog];
+    },
+    viewTransform(): { pan: { x: number; y: number }; zoom: number; width: number; height: number } {
+      return { pan: { ...state.pan }, zoom: state.zoom, width: SVG_W, height: SVG_H };
     },
     status() {
       const described = describePrompt(state.engine);
