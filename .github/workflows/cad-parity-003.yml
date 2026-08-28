@@ -239,7 +239,7 @@ jobs:
           npm run smoke:ifc
           npm run smoke:components
 
-      - name: Electron workspace smoke (real-UI parity: 19 steps incl. 5 CAD-PARITY-003 golden paths)
+      - name: "Electron workspace smoke (real-UI parity: 19 steps incl. 5 CAD-PARITY-003 golden paths)"
         working-directory: apps/electron
         env:
           OFFISOS_OCCT_WORKER: ${{ github.workspace }}/app/src/adapters/occt/worker/occt-worker.py
