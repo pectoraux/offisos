@@ -114,6 +114,18 @@
         "commit": "0cdec966b7c2277497ad56b3e06db0918048969e",
         "path": "apps/electron/test/smoke-workspace.mjs"
       }
+    },
+    {
+      "id": "EV-003",
+      "type": "ci-run",
+      "description": "All 34 PR-head check runs green on the PR head 20a8b41: cad-parity-003 run #3 (id 33188008440 \u2014 workspace-shell: the full 584-test app suite on BOTH pinned toolchains (OCCT 7.8.1.1.1 + ifcopenshell 0.8.5) + LOCK-018 forbidden-import scan covering the extended src/workspace core + the IFC worker pin probe; web-host-workspace: lint/typecheck/build + the shared-prompt-engine dev-server workflow smoke against the pinned CAD-PARITY-002 parity fixture; electron-host-workspace: build + TEN smokes incl. the 19-step real-UI workspace parity smoke with the result JSON uploaded as evidence), governance validation run #142 (id 33188008381 \u2014 tests, records, protected paths), and every regression workflow green on the same head (compat-ifc-001 #24, compat-cad-001 #33, compat-cad-002 #30, compat-cad-003 #27, compat-bim-003 #20, cad-implement-001 #54, cad-implement-002 #46, cad-implement-003 #40, research-cad-007 #30, cad-parity-002 #11). The one commit between the implementation head and this CI head is the cad-parity-003 workflow YAML syntax fix itself (quoting a step name containing a colon \u2014 the first push failed workflow-file validation with 0 jobs and no test ever ran on that broken file; no source, test or host file changed).",
+      "produced_at": "2026-08-28T16:07:00Z",
+      "reproducible": true,
+      "references": {
+        "commit": "20a8b414cf755206f5e5d0df13113f1fc7b8d4b1",
+        "workflow_run": "33188008440",
+        "pr": 79
+      }
     }
   ]
 }
