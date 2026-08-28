@@ -147,6 +147,55 @@
         ],
         "decision": "DEC-001"
       }
+    },
+    {
+      "from": "PR_OPEN",
+      "to": "VERIFYING",
+      "at": "2026-08-28T17:05:00Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "DEC-001 remediation resubmitted for Architect re-review at head dc3a512 (re-review request comment 5455228722 on PR #79): all 12 workflows green (34/34 check runs), governance validated 225/225, protected-path check PASS.",
+      "references": {
+        "pr": 79,
+        "commit": "dc3a51254fb0ad2475cb3ac95fcfeacd3776a755"
+      }
+    },
+    {
+      "from": "VERIFYING",
+      "to": "ARCHITECT_REVIEW",
+      "at": "2026-08-28T17:30:00Z",
+      "actor": "pectoraux",
+      "role": "architect",
+      "reason": "Architect re-review of the DEC-001 remediation evidence package (comment 5455562484).",
+      "references": {
+        "evidence": [
+          "EV-004"
+        ]
+      }
+    },
+    {
+      "from": "ARCHITECT_REVIEW",
+      "to": "IMPLEMENTING",
+      "at": "2026-08-28T17:30:00Z",
+      "actor": "pectoraux",
+      "role": "architect",
+      "reason": "Architect re-review complete \u2014 CHANGES REQUESTED (DEC-002, comment 5455562484): the deployed-Vercel acceptance rule is not satisfied; the exact PR head must be deployed and browser-verified.",
+      "references": {
+        "decision": "DEC-002"
+      },
+      "failure_reason": "The program-level CAD parity rule (established after CAD-PARITY-002) requires browser verification against the exact deployed Vercel revision; PR #79 carried only local dev-server/production-build evidence and explicitly stated no Vercel Preview was deployed."
+    },
+    {
+      "from": "IMPLEMENTING",
+      "to": "PR_OPEN",
+      "at": "2026-08-28T19:18:39Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "DEC-002 remediation complete: the exact PR head dc3a51254fb0ad2475cb3ac95fcfeacd3776a755 was deployed to Vercel Preview (https://offisos-7nlalje01-ekonplacidegmailcoms-projects.vercel.app) and the professional 2D workspace was browser-verified against the deployed revision \u2014 the full 2D protocol over the architect-required core parity surface (21/21 checks green: drawing, modify operations incl. the JOIN gap decline and ARC EXTEND/ROTATE/MIRROR/OFFSET/FILLET exactness, selection, precision aids, undo/redo, command-line interaction incl. the typed ROTATE-R/COPY-M declines) plus the HTTP workspace smoke reproducing the pinned CAD-PARITY-002 parity fixture against the same deployment; zero console/page errors. EV-005 recorded; PR #79 returned for final Architect review.",
+      "references": {
+        "pr": 79,
+        "commit": "dc3a51254fb0ad2475cb3ac95fcfeacd3776a755"
+      }
     }
   ],
   "evidence": [
@@ -196,6 +245,20 @@
         "commit": "e1d2d4650875c190a8f6c0fb9f4b69698283c4ca",
         "pr": 79
       }
+    },
+    {
+      "id": "EV-005",
+      "type": "inspectable-artifact",
+      "description": "Vercel Preview deployment of the exact PR #79 head dc3a51254fb0ad2475cb3ac95fcfeacd3776a755 and browser verification of the professional 2D workspace against the deployed revision (DEC-002 remediation). Deployed URL: https://offisos-7nlalje01-ekonplacidegmailcoms-projects.vercel.app (Vercel deployment dpl_Bc9Wfk7sBkMerGRTAoEqzPaawJRp; deployment meta gitsha=dc3a51254fb0ad2475cb3ac95fcfeacd3776a755, pr=79, workitem=CAD-PARITY-003 \u2014 binding verified via the Vercel REST API; Next.js 16 build on the Vercel builder: '/' static + '/api/cad' serverless function). Verified end-to-end: (1) deployed-surface probes return HTTP 200 for '/' (workspace shell) and '/api/cad' (canonical CAD state), cache-busted; (2) the CAD-PARITY-003 2D browser protocol executes 21/21 checks green against the deployed URL \u2014 shell render with all surfaces and the 18 new tools; typed drawing of LINE/CIRCLE/ELLIPSE/RECTANGLE/ARC/closed POLYLINE with exact geometry; TRIM with implied-all-edges + entityPoint canvas pick ((100,0)-(300,0) line trimmed to exactly (150,0)-(300,0) at the circle intersection); EXTEND to a boundary line ((800,0)-(850,0) -> (800,0)-(900,0)); FILLET r=20 with exact tangent geometry; OFFSET circle +15 (r 50->65); ROTATE 90 deg typed via P preselection (rotation=pi/2 exact); MIRROR across a vertical axis (exact mirrored arc 135-180 deg, source kept); JOIN of two gapped collinear lines declined with the typed join_failed 'gap' failure and NO geometry fabricated; JOIN of touching lines merged to the single exact span; window selection fully-contained-only; crossing selection contained+border-crossing (exact 5-entity set); click pick + Properties readout; endpoint + center osnap producing the exact snapped line (100,0)->(200,0) from offset cursors; ORTHO axis-constrained second point; deterministic undo/redo version walk; Esc cancellation; unknown-command message; typed declines for ROTATE R (Reference) and COPY M (Multiple); zero console/page errors across the whole session; (3) the HTTP workspace smoke reproduces the pinned CAD-PARITY-002 parity fixture (sha256 a48a29a8e1d4be65...) against the same deployment. Methodology: the browser session was driven through a transparent local relay that forwards every request to the deployed URL and serializes /api/cad requests (the App API keeps the open CADDocument in serverless instance memory \u2014 the CAD-PARITY-002 hosting finding); no app code executed locally; full transcript preserved (relay.log, protocol-results.json, screenshots protocol-NN-*.png in the verification workspace).",
+      "produced_at": "2026-08-28T19:18:39Z",
+      "reproducible": true,
+      "reproduction": "From a clean checkout of PR #79 head dc3a51254fb0ad2475cb3ac95fcfeacd3776a755: cd apps/web && npm install && npm run build; deploy with the Vercel CLI (vercel deploy --project offisos); then drive /home/z/cp3-verify/protocol.py <deployed-url> and OFFISOS_WEB_URL=<deployed-url> node --import tsx apps/web/test/workspace-smoke.mjs.",
+      "references": {
+        "pr": 79,
+        "commit": "dc3a51254fb0ad2475cb3ac95fcfeacd3776a755",
+        "artifact_path": "/home/z/cp3-verify/deployed-protocol.log",
+        "path": "/home/z/cp3-verify/deployed-smoke.log"
+      }
     }
   ],
   "decisions": [
@@ -212,6 +275,18 @@
         "EV-003"
       ],
       "remediation_required": "Fix the geometry semantics (JOIN must reject disconnected geometry; ARC EXTEND must use directed interval handling for both picked ends), add directed regression tests, rerun the complete 2D + regression + Web/Electron parity suite, update the governance evidence, and return PR #79 for review."
+    },
+    {
+      "id": "DEC-002",
+      "status": "changes_requested",
+      "decided_at": "2026-08-28T17:30:00Z",
+      "decided_by": "pectoraux",
+      "role": "architect",
+      "rationale": "Architect re-review of CAD-PARITY-003 / PR #79 (comment 5455562484): the JOIN/ARC-EXTEND geometry remediation is accepted in principle and the 596-test/34-check green posture is strong, but the program-level CAD parity rule established after CAD-PARITY-002 requires every Web-facing parity sprint to be browser-verified against the exact deployed Vercel revision, not only a local dev server, and PR #79 explicitly stated no Vercel Preview was deployed. No further geometry changes were requested unless the deployed test exposed another defect.",
+      "evidence_refs": [
+        "EV-004"
+      ],
+      "remediation_required": "Deploy the exact PR head to Vercel Preview, browser-verify the deployed 2D workspace over the core parity surface (drawing, modify operations, selection, precision aids, undo/redo, command-line interaction), record the deployed URL + deployed SHA + results as governance evidence, and return PR #79 for final Architect review."
     }
   ]
 }
