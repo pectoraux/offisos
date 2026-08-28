@@ -1,0 +1,255 @@
+name: cad-parity-003
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "apps/web/**"
+      - "apps/electron/**"
+      - ".github/workflows/cad-parity-003.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "apps/web/**"
+      - "apps/electron/**"
+      - ".github/workflows/cad-parity-003.yml"
+
+# CAD-PARITY-003: professional 2D primitives + modify system (Issue #78, CAD/
+# BIM Product Architecture v1.0 FROZEN under ConstructionOS Architecture
+# v1.1). Proves the genuinely usable AutoCAD-class 2D drafting vocabulary:
+#   - workspace-shell: the FULL app suite with BOTH real engines installed
+#     (cadquery-ocp / OCCT 7.8.1.1 for geometry; ifcopenshell 0.8.5 +
+#     IfcTester 0.8.5 for IFC/openBIM) — the pre-existing CAD/drafting/BIM/
+#     documentation/IFC/component/workspace regressions stay green (409
+#     tests) and the 175 new deterministic CAD-PARITY-003 tests run: the
+#     2D geometry kernel exactness (transforms/intersections/fillet/offset/
+#     trim/extend/break/join/explode/stretch/region with exact values), the
+#     storage-convention bridge, the precision engine (9 osnap modes with
+#     deterministic priority, pick, window/crossing selection incl. sampled
+#     spline crossing, ortho/polar/grid constraints), entity-ops semantics
+#     over BOTH conventions (typed failures, atomic batches, determinism
+#     double-runs), the 18 new command registry flows through the prompt
+#     engine (entityPoint steps, option sub-prompts, chainKeep, MOVE
+#     partition) and the App API end-to-end (entity.create/modify, undo
+#     exactness, precision queries, hidden-layer filtering). The LOCK-018
+#     forbidden-import scan covers the extended src/workspace core
+#     (geometry/, precision-2d, entity-ops, commands-2d).
+#   - web-host-workspace: the deployable Web host lints + typechecks +
+#     builds, then serves the professional workspace from the running dev
+#     server and drives the EXACT semantic command stream the UI produces
+#     through /api/cad including the pinned CAD-PARITY-002 parity fixture
+#     (save sha + command stream — the regression gate: the professional
+#     workspace shell behavior is unchanged by the new vocabulary).
+#   - electron-host-workspace: the deployable Electron host builds and runs
+#     TEN smokes — the nine regression smokes and the workspace
+#     BrowserWindow smoke driving the REAL professional UI (now 19 steps:
+#     the CAD-PARITY-002 14-step parity workflow unchanged + 5 new
+#     CAD-PARITY-003 steps — ELLIPSE via the command line with exact axes,
+#     TRIM implied-all-edges with an entityPoint canvas pick and exact
+#     trimmed geometry, ROTATE 45° typed with the exact endpoint, the
+#     ribbon exposing and driving all 18 new commands, and the canonical
+#     canvas pick with the properties readout) asserting the SAME pinned
+#     parity fixture — Web/Electron semantic parity is the acceptance
+#     criterion (LOCK-004).
+#
+# Engine isolation (LOCK-003/018): no engine import leaks into the renderer,
+# CADDocument, App API or the workspace command core (enforced by the
+# LOCK-018 scan); IfcOpenShell/IfcTester run only inside the IFC adapter's
+# disposable Python worker. The CAD-PARITY-003 core is engine-free by
+# construction (pure TypeScript geometry kernel).
+
+jobs:
+  workspace-shell:
+    name: Workspace deterministic suite (OCCT 7.8.1.1 + ifcopenshell 0.8.5 toolchains)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Python (pinned toolchain)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned OCCT engine (cadquery-ocp)
+        run: pip install cadquery-ocp==7.8.1.1.post1
+
+      - name: Install the pinned IFC toolchain (ifcopenshell + IfcTester)
+        run: pip install ifcopenshell==0.8.5 IfcTester==0.8.5 numpy==2.1.3
+
+      - name: Install root toolchain (tsx + typescript + ajv)
+        run: npm install
+
+      - name: Typecheck app shell (incl. the CAD-PARITY-003 workspace core)
+        run: node_modules/.bin/tsc --noEmit -p app/tsconfig.json
+
+      - name: "Full app test suite with both real engines (584 tests: 409 pre-existing + 175 CAD-PARITY-003)"
+        working-directory: app
+        run: node --import tsx --test test/*.test.ts
+
+      - name: "CAD-PARITY-003 deterministic suite (kernel/bridge/precision/entity-ops/commands/API)"
+        working-directory: app
+        run: node --import tsx --test test/workspace-2d-*.test.ts
+
+      - name: Forbidden-import static check (LOCK-018 incl. src/workspace + geometry + entity-ops)
+        working-directory: app
+        run: node --import tsx --test test/no-forbidden-imports.test.ts
+
+      - name: IFC worker availability probe (pin check)
+        working-directory: app
+        run: |
+          echo '{"op":"ping"}' | python3 src/adapters/ifc/worker/ifc-worker.py
+          echo '{"op":"ping"}' | python3 src/adapters/ifc/worker/ifc-worker.py | grep -q '"engineVersion":"0.8.5"'
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cad-parity-003-shell-evidence
+          path: app/src
+          if-no-files-found: warn
+
+  web-host-workspace:
+    name: Web host (Next.js 16 + workspace workflow smoke + parity fixture)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package.json
+
+      - name: Set up Python (pinned toolchain)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned engines (OCCT + ifcopenshell)
+        run: pip install cadquery-ocp==7.8.1.1.post1 ifcopenshell==0.8.5 IfcTester==0.8.5 numpy==2.1.3
+
+      - name: Install root toolchain (tsx for the shared-engine smoke)
+        run: npm install
+
+      - name: Install Web host deps
+        working-directory: apps/web
+        run: npm install
+
+      - name: Web host lint (ESLint)
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Web host typecheck (tsc --noEmit)
+        working-directory: apps/web
+        run: npx tsc --noEmit
+
+      - name: Web host build (next build --webpack)
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Web host workspace workflow smoke (dev server + shared prompt engine + parity fixture)
+        working-directory: apps/web
+        env:
+          OFFISOS_OCCT_WORKER: ${{ github.workspace }}/app/src/adapters/occt/worker/occt-worker.py
+          OFFISOS_IFC_WORKER: ${{ github.workspace }}/app/src/adapters/ifc/worker/ifc-worker.py
+          OFFISOS_WEB_URL: http://localhost:3100
+        run: |
+          npm run dev -- --webpack -p 3100 &
+          DEV_PID=$!
+          for i in $(seq 1 60); do
+            if curl -sS -o /dev/null http://localhost:3100/ 2>/dev/null; then break; fi
+            sleep 2
+          done
+          sleep 3
+          cd ../..
+          node --import tsx apps/web/test/workspace-smoke.mjs
+          SMOKE_STATUS=$?
+          kill $DEV_PID 2>/dev/null || true
+          exit $SMOKE_STATUS
+
+      - name: Upload workspace smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cad-parity-003-web-evidence
+          path: app/test/fixtures/cad-parity-002-parity.json
+          if-no-files-found: warn
+
+  electron-host-workspace:
+    name: Electron host (build + 10 smokes incl. the workspace real-UI parity smoke with CAD-PARITY-003 steps)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/electron/package.json
+
+      - name: Set up Python (pinned toolchain)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned engines (OCCT + ifcopenshell)
+        run: pip install cadquery-ocp==7.8.1.1.post1 ifcopenshell==0.8.5 IfcTester==0.8.5 numpy==2.1.3
+
+      - name: Install Xvfb (headless display)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Install Electron host deps
+        working-directory: apps/electron
+        run: npm install
+
+      - name: Electron host typecheck
+        working-directory: apps/electron
+        run: npm run typecheck
+
+      - name: Electron host build
+        working-directory: apps/electron
+        run: npm run build
+
+      - name: Electron regression smokes (engine-free, geometry, model, impact, drafting, BIM, documentation, IFC, components)
+        working-directory: apps/electron
+        env:
+          OFFISOS_OCCT_WORKER: ${{ github.workspace }}/app/src/adapters/occt/worker/occt-worker.py
+          OFFISOS_IFC_WORKER: ${{ github.workspace }}/app/src/adapters/ifc/worker/ifc-worker.py
+        run: |
+          npm run smoke
+          npm run smoke:geometry
+          npm run smoke:model
+          npm run smoke:impact
+          npm run smoke:drafting
+          npm run smoke:bim
+          npm run smoke:docs
+          npm run smoke:ifc
+          npm run smoke:components
+
+      - name: Electron workspace smoke (real-UI parity: 19 steps incl. 5 CAD-PARITY-003 golden paths)
+        working-directory: apps/electron
+        env:
+          OFFISOS_OCCT_WORKER: ${{ github.workspace }}/app/src/adapters/occt/worker/occt-worker.py
+          OFFISOS_IFC_WORKER: ${{ github.workspace }}/app/src/adapters/ifc/worker/ifc-worker.py
+        run: npm run smoke:workspace
+
+      - name: Upload workspace smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cad-parity-003-electron-evidence
+          path: apps/electron/dist/smoke-workspace-result.json
+          if-no-files-found: warn
