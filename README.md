@@ -30,3 +30,17 @@ npm run governance -- check-verified-revisions
 ```
 
 Node.js ≥ 20 is required.
+
+## Web host deployments (Vercel)
+
+- **Repository:** `pectoraux/offisos` — **web root:** `apps/web` (Next.js 16 host; the canonical `@offisos/cad-app-shell` contracts resolve from `../../app/src/*` through the `apps/web/tsconfig.json` path alias — never duplicated or forked).
+- **Vercel project:** `offisos` (project id `prj_p4IGIM5pBpL8pgVdfJhczR789BFL`) in the **`ekonplacidegmailcoms-projects`** scope/team. **Scope warning:** the project is visible only from that team scope — a Vercel session connected under a different team or personal scope will not list it, and the dashboard will look like the project is missing. Switch the active scope in the Vercel dashboard before concluding the project does not exist. Production URL: <https://offisos.vercel.app>.
+- **Project settings:** framework Next.js, **Root Directory `apps/web`** (never the repository root), Node 24. Vercel installs the `apps/web` dependencies and runs the repository's own build (`next build --webpack`, including the `extensionAlias` mapping for the canonical `.js`→`.ts` ESM specifiers); `typescript.ignoreBuildErrors` and the webpack fallback are deliberate configuration — do not casually remove them.
+- **Git integration is NOT connected:** pushes to `main` do **not** auto-deploy, and merging a milestone never updates production. Every production deployment is made explicitly from a clean checkout of the exact `main` revision, binding the deployment to the deployed SHA for auditability:
+  ```bash
+  vercel deploy --prod --project offisos --scope ekonplacidegmailcoms-projects \
+    --yes --meta gitsha="$(git rev-parse HEAD)" --token "$VERCEL_TOKEN"
+  ```
+  Tokens are used ephemerally from the environment and must never be committed; `.vercel/` and `.env*` are gitignored.
+- **Production vs preview:** `--prod` reassigns the production alias `offisos.vercel.app` (plus the project's team-suffix domain) to the new deployment. Preview deployments stay on per-deployment URLs and never touch the production alias. Automatic PR previews would additionally require the Vercel GitHub App to be granted access to `pectoraux/offisos` (<https://github.com/apps/vercel/installations/new>); that grant is currently absent.
+- **Serverless boundary:** the engine-free CAD/BIM demo (drafting, BIM authoring, components/materials, `/api/cad`) runs with no external secrets. The OCCT/IFC Python engine workers are unavailable on serverless; `ifc.*` operations return the typed `ifc_unavailable` decline there — a diagnostic-only boundary, consistent with the P019/P020 certification records.
