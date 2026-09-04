@@ -1,0 +1,348 @@
+{
+  "benchmark": "Offisos AutoCAD Real-World Black-Box Benchmark",
+  "benchmark_id": "CAD-BENCH-RW-001",
+  "date": "2026-09-04",
+  "agent_role": "black-box benchmark agent (browser-driven, production-only)",
+  "system_under_test": {
+    "production_url": "https://offisos.vercel.app",
+    "baseline_git_sha": "f4a1a735dfbfa58d9b24197ffc1808d4cdf84db6",
+    "deployment_id": "dpl_2keo5yEQ3o3WnHncF6ggGMoqjAvm",
+    "observed_title": "Offisos CAD Workspace",
+    "observed_ui_surface": {
+      "application_menus": ["File", "Edit", "View", "Output", "Insert", "Annotate", "Manage", "BIM", "Coordination", "Documentation", "Document", "Help"],
+      "menus_functional": false,
+      "workspace_presets": ["Drafting & Annotation", "BIM", "Documentation", "Compact"],
+      "ribbon_tabs": ["Home", "Insert", "Annotate", "Parametric", "Layout", "3D Model", "Materials", "Coordination", "Documentation", "BIM", "Document", "View"],
+      "workbench_tabs": ["Model", "3D", "3D BIM", "Documentation", "Interoperability", "Components", "Schedules", "Collab", "Automation", "Toolsets", "Parametrics", "Certification"],
+      "palette_tabs": ["Props", "Layers", "Styles", "Blocks", "Constr", "Layouts", "Coord", "Docs", "Nav"],
+      "status_bar_toggles": ["SNAP", "GRID", "ORTHO", "POLAR", "OTRACK", "OSNAP", "LWT"],
+      "command_line": "single-line command input with command history echo",
+      "canvas": "single 2D canvas viewport (Model), ~936x420 px at test viewport 1470x860"
+    }
+  },
+  "method": {
+    "protocol": "Phase 1 understand public reference -> Phase 2 reproduce through Offisos UI (browser agent as a real user; command line + ribbon + palettes only) -> Phase 3 record evidence",
+    "primary_instrument": "browser automation against production deployment (agent-browser/Chromium)",
+    "api_use": "only GET /api/cad once, to inspect server graph identity after UI operations",
+    "source_rule": "public references used as workflow/complexity models, never redistributed",
+    "escalation": "moderate drawings -> multi-feature -> documentation -> detail-heavy -> long-session -> persistence -> undo/redo -> failure recovery"
+  },
+  "scoring_scale": {
+    "5": "Production-parity",
+    "4": "Strong",
+    "3": "Partial",
+    "2": "Weak",
+    "1": "Token capability",
+    "0": "Unsupported"
+  },
+  "projects": [
+    {
+      "id": "P01", "rank": 6, "discipline": "architecture",
+      "name": "Single-family residential floor plan (walls, layers, offsets, dims, text)",
+      "source_url": "https://dwgfree.com/category/autocad-floor-plans",
+      "source_type": "public drawing library (workflow reference)",
+      "major_operations": ["layer standard A-", "RECTANGLE exterior wall 12000x9000", "OFFSET 250 wall thickness", "interior wall LINEs", "door arcs", "DIMLINEAR", "TEXT room labels"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "layers fundamentally unusable (DEF-001/002/003); OFFSET creation fails on dangling layer; rendering clipped until ZOOMEXTENTS",
+      "evidence": ["P01-layers-arch-standard.png", "P01-exterior-wall-rect.png", "P01-dimlinear-rendered.png", "P01-text-rendered.png", "P01-canvas-state-check.png"]
+    },
+    {
+      "id": "P02", "rank": 7, "discipline": "architecture",
+      "name": "Office floor plan with door swings and room labels",
+      "source_url": "https://www.autodesk.com/learn/ondemand/module/practice-exercise-create-a-technical-drawin",
+      "source_type": "official practice module (workflow reference)",
+      "major_operations": ["layers", "wall lines", "door swing arcs", "MTEXT room labels", "dimensions"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "geometry creation works but layers/selection/picking defects block the professional workflow; door swings need arcs + trim (trim-object pick broken)",
+      "evidence": ["P01-dimlinear-rendered.png (shared primitives)", "P01-text-rendered.png (shared primitives)"]
+    },
+    {
+      "id": "P03", "rank": 8, "discipline": "architecture",
+      "name": "Multi-storey residential repetitive floor grid (STORY + array/copy floors)",
+      "source_url": "https://freecadfloorplans.com",
+      "source_type": "public drawing library (workflow reference)",
+      "major_operations": ["STORY levels", "grid XLINEs", "ARRAY of repeating bays", "copy floor plan"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "STORY creation works; ARRAY completes but copies do not render and are not selectable (DEF-015); no floor-copy workflow reachable",
+      "evidence": ["P10-array-result.png", "P10-array-final.png", "P16-bim-walls.png (STORY evidence)"]
+    },
+    {
+      "id": "P04", "rank": 11, "discipline": "architecture",
+      "name": "Reflected ceiling plan with lighting symbol blocks",
+      "source_url": "https://cadtemplates.org/electric-lighting-symbols-cad-template-dwg",
+      "source_type": "public CAD template (workflow reference)",
+      "major_operations": ["ceiling grid layers", "light fixture BLOCKs", "INSERT + arrays of fixtures"],
+      "scores": {"capability": 0, "fidelity": 0, "usability": 0, "robustness": 0, "persistence": 0, "overall": 0},
+      "blocking": true,
+      "main_weakness": "BLOCK creation unreachable (DEF-013): selection cleared by name/base-point prompts, canvas picking dead -> no symbol workflow at all",
+      "evidence": ["browser log in benchmark report section P04 (command history: BLOCK -> 'No previous selection')"]
+    },
+    {
+      "id": "P05", "rank": 14, "discipline": "architecture",
+      "name": "Building elevation with hatches and vertical dimensions",
+      "source_url": "https://dwgfree.com/category/autocad-floor-plans",
+      "source_type": "public drawing library (workflow reference)",
+      "major_operations": ["elevation lines", "vertical DIMLINEARs", "material HATCHes"],
+      "scores": {"capability": 1, "fidelity": 0, "usability": 1, "robustness": 1, "persistence": 0, "overall": 0},
+      "blocking": true,
+      "main_weakness": "HATCH entirely absent (DEF-023); vertical dims work in principle (DIMLINEAR) but elevation material representation impossible",
+      "evidence": ["browser log (Unknown command 'HATCH'/'BHATCH'/'-HATCH'/'H'; no hatch ribbon button)"]
+    },
+    {
+      "id": "P06", "rank": 15, "discipline": "architecture",
+      "name": "Wall section construction detail (layers + hatch + dims)",
+      "source_url": "https://dwgfree.com",
+      "source_type": "public drawing library (workflow reference)",
+      "major_operations": ["detail lines by material layer", "insulation HATCH", "linetypes per material", "dims"],
+      "scores": {"capability": 0, "fidelity": 0, "usability": 0, "robustness": 0, "persistence": 0, "overall": 0},
+      "blocking": true,
+      "main_weakness": "no HATCH + no usable layers: the two foundations of construction detailing are both absent/broken",
+      "evidence": ["browser log (HATCH unknown; layer.setActive bad_layer errors)"]
+    },
+    {
+      "id": "P07", "rank": 13, "discipline": "architecture",
+      "name": "Stair plan and section detail (repeated treads)",
+      "source_url": "https://tutorial45.com/autocad-exercise-01",
+      "source_type": "public exercise (workflow reference)",
+      "major_operations": ["tread ARRAY", "riser LINEs", "stair dims", "break line"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "ARRAY completes but result invisible (DEF-015) -> repeated treads cannot be produced reliably",
+      "evidence": ["P10-array-final.png (array result blank)"]
+    },
+    {
+      "id": "P08", "rank": 12, "discipline": "architecture",
+      "name": "Door schedule table",
+      "source_url": "https://www.autodesk.com/solutions/cad-blocks",
+      "source_type": "public examples (workflow reference)",
+      "major_operations": ["TABLE", "door data rows", "revision marks"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": false,
+      "main_weakness": "Schedules workbench exists (property definitions + schedules.run machinery, CAD-PARITY-015) but no TABLE drafting command found; door data has no source blocks (P04 dead) so a real schedule has nothing to schedule",
+      "evidence": ["P08-schedules-tab.png"]
+    },
+    {
+      "id": "P09", "rank": 5, "discipline": "civil",
+      "name": "Site plan with setbacks and building footprint (real-scale meters)",
+      "source_url": "https://afd.calpoly.edu/facilities/campus-maps/building-floor-plans/autocad",
+      "source_type": "real public facility plans (real-project reference)",
+      "major_operations": ["site boundary at 30000-80000mm extents", "building footprint", "setback dims", "north arrow"],
+      "scores": {"capability": 1, "fidelity": 0, "usability": 1, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "entities with any out-of-viewport endpoint are not rendered at all (DEF-004) until ZOOMEXTENTS; no zoom/pan navigation (DEF-005) -> a site plan is a single frozen fit-view image, unworkable",
+      "evidence": ["browser log (5000mm crossing line renders 0 px; 10m line invisible; ZOOMEXTENTS makes it appear)"]
+    },
+    {
+      "id": "P10", "rank": 9, "discipline": "civil",
+      "name": "Parking layout with stall arrays",
+      "source_url": "https://simutecra.com/blogs/civil-engineering-cad-site-plans-grading-drainage",
+      "source_type": "public article + standard practice (workflow reference)",
+      "major_operations": ["stall LINE", "ARRAYRECT of stalls", "aisle dims"],
+      "scores": {"capability": 1, "fidelity": 0, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "ARRAY Rectangular command flow works and reports '4 copies ... one atomic revision' but the copies do not render and are not selectable (DEF-015)",
+      "evidence": ["P10-array-result.png", "P10-array-3rows.png", "P10-array-final.png"]
+    },
+    {
+      "id": "P11", "rank": 16, "discipline": "civil",
+      "name": "Contour/topographic plan",
+      "source_url": "https://dwgfree.com",
+      "source_type": "public drawing library (workflow reference)",
+      "major_operations": ["SPLINE contours", "polylines", "elevation labels"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "SPLINE command exists (canvas free-draw also creates splines accidentally); contour labeling needs TEXT (works); but no editing/selection reliability for closed contour polylines; persistence 0",
+      "evidence": ["workspace save JSON (spline entity observed in download)"]
+    },
+    {
+      "id": "P12", "rank": 17, "discipline": "civil",
+      "name": "Road geometry with curves (arcs, fillets, tangents)",
+      "source_url": "https://simutecra.com/blogs/civil-engineering-cad-site-plans-grading-drainage",
+      "source_type": "public article (workflow reference)",
+      "major_operations": ["centerlines", "ARC curves", "FILLET tangential joins", "curve dims"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "FILLET R keyword works and prompts appear correct, but fillet object selection requires picking (broken) -> fillets cannot complete on real geometry",
+      "evidence": ["browser log (FILLET -> R -> 'Specify fillet radius:')"]
+    },
+    {
+      "id": "P13", "rank": 10, "discipline": "structural",
+      "name": "Foundation plan with column grid",
+      "source_url": "https://www.reddit.com/r/civilengineering/comments/164u52l/where_to_find_sample_commercial",
+      "source_type": "public discussion + libraries (workflow reference)",
+      "major_operations": ["XLINE grid", "column RECTANGLEs", "grid bubbles TEXT", "ARRAY columns", "dims"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "XLINE/RECTANGLE primitives work; grid bubbles and columns need layers + arrays + text (layers broken, arrays invisible)",
+      "evidence": ["P01-exterior-wall-rect.png (RECTANGLE render after ZOOMEXTENTS)", "P10-array-final.png"]
+    },
+    {
+      "id": "P14", "rank": 18, "discipline": "structural",
+      "name": "Steel connection detail with bolt-hole pattern",
+      "source_url": "https://dwgshare.com/autocad-blocks-for-hvac-design-free-download",
+      "source_type": "public blocks library (structural analog, workflow reference)",
+      "major_operations": ["CIRCLE bolt holes", "hole ARRAY", "centerlines", "HATCH section steel"],
+      "scores": {"capability": 1, "fidelity": 0, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "CIRCLE + ARRAY would be the core; array result invisible (DEF-015); no hatch for section steel; no centerline linetype workflow verified (linetype table exists in DXF writer but layer system broken)",
+      "evidence": ["P10-array-final.png"]
+    },
+    {
+      "id": "P15", "rank": 19, "discipline": "structural",
+      "name": "RC beam reinforcement detail (rebar shapes)",
+      "source_url": "https://dwgfree.com",
+      "source_type": "public drawing library (workflow reference)",
+      "major_operations": ["polyline rebar shapes", "stirrup arrays", "concrete HATCH", "dims"],
+      "scores": {"capability": 1, "fidelity": 0, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "POLYLINE exists (vertex prompts work; [Close] keyword advertised), but no hatch + array invisibility + layer breakage remove the professional result",
+      "evidence": ["browser log (POLYLINE flow; 'Arc' keyword cancels command)"]
+    },
+    {
+      "id": "P16", "rank": 3, "discipline": "mep",
+      "name": "HVAC duct layout (walls + double-line ducts + equipment)",
+      "source_url": "https://www.magicpak.com/specification/cad-drawings",
+      "source_type": "manufacturer CAD templates (real-product reference)",
+      "major_operations": ["WALL host", "double-line ducts via OFFSET", "equipment", "layers per system"],
+      "scores": {"capability": 2, "fidelity": 1, "usability": 2, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "STORY+WALL create and render (the strongest observed workflow); but duct OFFSET fails on dangling layers, BIM walls are not DXF-exportable, IFC export unavailable on the web host",
+      "evidence": ["P16-bim-walls.png"]
+    },
+    {
+      "id": "P17", "rank": 12, "discipline": "mep",
+      "name": "Electrical lighting plan with symbol legend",
+      "source_url": "https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/electric",
+      "source_type": "official symbols article (workflow reference)",
+      "major_operations": ["fixture BLOCK + attributes", "INSERT arrays", "legend", "wiring polylines"],
+      "scores": {"capability": 0, "fidelity": 0, "usability": 0, "robustness": 0, "persistence": 0, "overall": 0},
+      "blocking": true,
+      "main_weakness": "BLOCK creation impossible (DEF-013); Attribute Definition/Edit buttons exist on ribbon but the block prerequisite is dead",
+      "evidence": ["browser log (BLOCK -> name -> base point -> P: 'No previous selection'; canvas clicks do not pick)"]
+    },
+    {
+      "id": "P18", "rank": 4, "discipline": "mechanical",
+      "name": "Multi-view part drawing with dimensions and tolerances",
+      "source_url": "https://www.autodesk.com/learn/ondemand/module/practice-exercise-create-a-technical-drawin",
+      "source_type": "official practice module (workflow reference)",
+      "major_operations": ["2-3 orthographic views", "DIMLINEAR + radius/diameter", "tolerance text", "centerlines"],
+      "scores": {"capability": 2, "fidelity": 1, "usability": 2, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "DIMLINEAR works and renders ('measured server-side'); no tolerance/dimension-style workflow reachable (Styles palette unexplored but layer/state defects dominate); views cannot be aligned by snapping reliably",
+      "evidence": ["P01-dimlinear-rendered.png"]
+    },
+    {
+      "id": "P19", "rank": 2, "discipline": "mechanical",
+      "name": "tutorial45 Exercise 1 quadrilateral (polar coordinates + trim)",
+      "source_url": "https://tutorial45.com/autocad-exercise-01",
+      "source_type": "public exercise (workflow reference)",
+      "major_operations": ["LINE @50<-53", "angle-derived lines", "TRIM to close", "verify A"],
+      "scores": {"capability": 3, "fidelity": 2, "usability": 3, "robustness": 2, "persistence": 0, "overall": 2},
+      "blocking": false,
+      "main_weakness": "polar/relative coordinate entry works exactly (@100,0 -> (100,0), @50<90 -> (100,50), @50<45 -> (135.355,85.355)); TRIM selection-by-P works but trimming the target object needs a pick (broken); no LIST to verify the answer; persistence 0",
+      "evidence": ["browser log (polar coordinate echoes)", "P01-dimlinear-rendered.png (shared render path)"]
+    },
+    {
+      "id": "P20", "rank": 9, "discipline": "mechanical",
+      "name": "Flange plate fabrication drawing with bolt-hole circle",
+      "source_url": "https://sourcecad.com/blog/autocad-practice-drawings-with-pdf-ebook",
+      "source_type": "public practice set (workflow reference)",
+      "major_operations": ["CIRCLE bolt circle", "hole CIRCLEs", "ARRAY polar", "keyway", "dims"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "CIRCLE works (center + radius); polar array advertised in ARRAY prompt but rectangular path already yields invisible results (DEF-015)",
+      "evidence": ["P10-array-final.png", "browser log (CIRCLE flow)"]
+    },
+    {
+      "id": "P21", "rank": 1, "discipline": "documentation",
+      "name": "Title block + revision block + sheet border",
+      "source_url": "https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/6XGQklp3ZcBFqljLPjrn",
+      "source_type": "official sample files (workflow reference)",
+      "major_operations": ["LAYOUTNEW A3", "TITLEBLOCK rows", "border rectangle", "revision table"],
+      "scores": {"capability": 3, "fidelity": 2, "usability": 3, "robustness": 1, "persistence": 0, "overall": 2},
+      "blocking": false,
+      "main_weakness": "LAYOUTNEW creates A3 landscape + activates paper space; TITLEBLOCK creates 'TB-STD 5 rows 180x60 mm'; but MVIEW then fails engine-side ('layout A-101 does not exist') and the layout vanishes from the panel (DEF-018); nothing persists",
+      "evidence": ["P21-documentation-tab.png"]
+    },
+    {
+      "id": "P22", "rank": 5, "discipline": "documentation",
+      "name": "Sheet layout with viewports and scaled views",
+      "source_url": "https://www.autodesk.com/support/technical/article/caas/tsarticles/ts/6XGQklp3ZcBFqljLPjrn",
+      "source_type": "official sample files (workflow reference)",
+      "major_operations": ["LAYOUTNEW", "MVIEW fit/scale", "viewport scale", "annotation in paper space"],
+      "scores": {"capability": 1, "fidelity": 0, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "MVIEW: corners accepted, 'Fit' echoes success then async '*ERROR* viewport.create: bad_id — layout does not exist'; layout then disappears from the Documentation panel; sheet export reports 'no sheets in this document'",
+      "evidence": ["P21-documentation-tab.png", "browser log (MVIEW error sequence)"]
+    },
+    {
+      "id": "P23", "rank": 3, "discipline": "complex",
+      "name": "Long editing session torture (100+ operations over ~70 minutes)",
+      "source_url": "composite",
+      "source_type": "composite",
+      "major_operations": ["draw/edit/dim/text/layers/blocks/BIM/layouts/undo interleaved", "state watching"],
+      "scores": {"capability": 1, "fidelity": 1, "usability": 1, "robustness": 0, "persistence": 0, "overall": 1},
+      "blocking": true,
+      "main_weakness": "state degradation observed: entity-count inflation (NEW stops clearing the graph; SELECTALL reports 3 then 5 entities for 1-3 drawn), canvas blanking during failed command sequences, status-bar layer display flapping between values, version counter non-monotonic, transient 'working…' stuck states",
+      "evidence": ["FINAL-session-command-history.txt", "FINAL-state.png", "P01-canvas-state-check.png"]
+    },
+    {
+      "id": "P24", "rank": 1, "discipline": "complex",
+      "name": "Persistence / reload / round-trip cycle",
+      "source_url": "composite",
+      "source_type": "composite",
+      "major_operations": ["draw", "SAVE (download)", "reload", "DXF export", "DXF import", "verify"],
+      "scores": {"capability": 0, "fidelity": 0, "usability": 0, "robustness": 0, "persistence": 0, "overall": 0},
+      "blocking": true,
+      "main_weakness": "total failure chain: reload loses all work; SAVE downloads a stale snapshot that does not match the document (identical sha256 for different documents; includes server-side entities referencing nonexistent layers); DXF export skips freshly drawn LINE/CIRCLE as 'geometry-unknown' (only TEXT exports); DXF import hangs forever ('importing the DXF…') and destroys the Model viewport (canvas removed, tabs frozen) until a reload — which loses everything",
+      "evidence": ["P24-import-crash.png", "P24-dxf-import-viewport-destroyed.png", "offisos-workspace.json + offisos-export.dxf downloads (documented in report)"]
+    },
+    {
+      "id": "P25", "rank": 4, "discipline": "complex",
+      "name": "Failure recovery and undo/redo torture",
+      "source_url": "composite",
+      "source_type": "composite",
+      "major_operations": ["UNDO x3", "REDO x3", "interleave", "cancel mid-command", "escape behavior"],
+      "scores": {"capability": 2, "fidelity": 1, "usability": 2, "robustness": 1, "persistence": 0, "overall": 1},
+      "blocking": false,
+      "main_weakness": "UNDO removes entities but leaves a visual ghost of the undone line on the canvas (canvas state diverges from graph state); 3 undos yield only 2 possible redos then '*ERROR* document.redo: nothing_to_redo'; a failed CLAYER resets the active layer as a side effect; typing a new command silently cancels a pending interactive command",
+      "evidence": ["00-recon-line-drawn.png", "00-recon-after-undo.png", "u1-empty.png", "u2-after-undo.png", "u3-line-again.png", "FINAL-session-command-history.txt"]
+    }
+  ],
+  "executive": {
+    "overall_score_0_100": 18,
+    "verdict": "The current Offisos web application is NOT a practical replacement for common AutoCAD workflows. Geometry primitives (LINE/RECTANGLE/CIRCLE/POLYLINE with absolute, relative and polar coordinate entry), annotation creation (TEXT/MTEXT/DIMLINEAR), BIM story/wall creation, layout/title-block creation, and one zoom command (ZOOMEXTENTS) respond correctly at the command line. However every professional-critical subsystem fails: layers are unusable (all geometry lands on layer '0' through every command path), object picking is non-functional, navigation is a single fit-view command, arrays create invisible results, blocks are unreachable, hatches do not exist, BIM openings are unreachable, viewports fail engine-side, nothing persists across reload, SAVE exports a stale disconnected snapshot, DXF export rejects the app's own line/circle geometry, and DXF import hangs and destroys the workspace viewport. A competent AutoCAD user could not complete any of the 25 benchmark projects to a usable professional result.",
+    "score_rationale": "+geometry primitives and coordinate entry (exact echoes, relative/polar verified to 6 decimal places); +DIMLINEAR/TEXT/MTEXT creation and rendering; +STORY/WALL creation and rendering; +LAYOUTNEW/TITLEBLOCK; +ROTATE/TRIM/ARRAY select-by-P flow; +zero browser console/page errors (silent-failure design). -layers (0 working activation path in practice), -selection (two desynced selection paths, dead picking), -views (no zoom/pan), -rendering (all-or-nothing entity clipping), -persistence (total loss, stale save, no open), -interop (DXF export/import both broken; import destructive), -blocks/hatch/attributes absent or unreachable, -layout viewports engine-side failure, -state machine instability over long sessions, -command keyword inconsistency, -dead application menubar, -no command discovery (no autocomplete, F1 hint false)."
+  },
+  "category_scores": {
+    "2d_drafting": {"score": 1, "note": "primitives + coordinate entry work; rendering, navigation, undo-ghosts and state drift make real drafting unreliable"},
+    "architectural_documentation": {"score": 1, "note": "layers/hatch/blocks broken or absent; DIMLINEAR/TEXT work"},
+    "civil_site": {"score": 1, "note": "real-scale geometry invisible until ZOOMEXTENTS; no navigation; arrays invisible"},
+    "structural": {"score": 1, "note": "grid/rect primitives work; arrays invisible, no hatch, layers broken"},
+    "mep": {"score": 0, "note": "symbol blocks unreachable (BLOCK dead); walls work but no export"},
+    "mechanical_detail_drafting": {"score": 1, "note": "dims work; trim/fillet object-pick broken; arrays invisible; no tolerance workflow"},
+    "annotation_documentation": {"score": 2, "note": "TEXT/MTEXT/DIMLINEAR create and render; MTEXT layer echo shows raw ids; no associative dims verification possible (selection broken)"},
+    "layers_properties": {"score": 0, "note": "no working layer activation path; client/engine identity split; NEW leaves dangling active layer that bricks creation"},
+    "blocks_reuse": {"score": 0, "note": "BLOCK creation unreachable (selection cleared + picking dead)"},
+    "editing": {"score": 1, "note": "ROTATE completes via P-selection; TRIM reaches object-pick stage; picking broken blocks completion"},
+    "persistence": {"score": 0, "note": "reload = total loss; SAVE = stale snapshot; no OPEN; DXF import destroys the viewport"},
+    "layouts_plotting": {"score": 1, "note": "LAYOUTNEW + TITLEBLOCK work; MVIEW fails engine-side and the layout vanishes; sheets unexportable"},
+    "complex_workflows": {"score": 1, "note": "long sessions degrade state (entity-count inflation, canvas blanking, status flapping)"},
+    "bim_elements": {"score": 2, "note": "STORY/WALL create and render correctly (width 240 height 3000 defaults); DOOR host-pick unreachable; no BIM export path on web host"}
+  },
+  "positive_findings": [
+    "LINE/RECTANGLE/CIRCLE/POLYLINE creation with absolute ('0,0'), relative ('@100,0'), and polar ('@50<45' -> 135.355,85.355) coordinate entry — echoes are exact",
+    "DIMLINEAR full prompt flow (extension origins, dimension line location) creates a rendered dimension entity ('measured server-side')",
+    "TEXT and MTEXT creation flows complete with correct echoes",
+    "STORY ('Ground Floor' level 0 height 3000) and WALL ((0,0)->(5000,0) width 240 height 3000) BIM creation works and renders as a closed plan",
+    "LAYOUTNEW (A3 landscape, 10mm margins, fit) and TITLEBLOCK (5 rows, 180x60mm) work",
+    "ARRAY command flow with proper keyword prompts (Rectangular/Polar, 'Path is unsupported' honestly disclosed) and 'one atomic revision' semantics",
+    "ROTATE completes ('1 object(s) 90 degrees about (0,0)') via previous-selection",
+    "ZOOMEXTENTS rescales to drawing extents",
+    "Command error messages for bad coordinates are helpful and non-destructive",
+    "Zero browser console messages and zero page errors across the entire ~70-minute session — all failures surface as command-line echoes (no hydration crashes, no JS exceptions)"
+  ]
+}
