@@ -1,0 +1,60 @@
+SELECTALL
+SELECTALL.
+LINE
+0,0 → (0,0)
+300,0 → (300,0)
+LINE: (0,0) → (300,0) on layer '0'.
+*Cancel*
+LAYOUTNEW
+A-101
+Layout 'A-101' created (A3 landscape, 10 mm margins, fit) and activated.
+TITLEBLOCK
+TB-STD
+P1
+Benchmark Agent
+TITLEBLOCK: 'TB-STD' — 5 rows, 180×60 mm.
+Unknown command 'REV-A'. Press F1 or Ctrl+K for the command search.
+MVIEW
+20,20 → (20,20)
+380,270 → (380,270)
+Fit
+Viewport placed on 'A-101' from 20,20 to 380,270 (fit to the model extents).
+*ERROR* viewport.create: bad_id — layout 'A-101' does not exist
+NEW
+NEW.
+NEW: fresh document created.
+LINE
+100,0 → (100,0)
+150,100 → (150,100)
+LINE: (100,0) → (150,100) on layer '0'.
+*Cancel*
+LINE
+200,0 → (200,0)
+250,100 → (250,100)
+LINE: (200,0) → (250,100) on layer '0'.
+*Cancel*
+LINE
+300,0 → (300,0)
+350,100 → (350,100)
+LINE: (300,0) → (350,100) on layer '0'.
+*Cancel*
+SELECTALL
+SELECTALL.
+UNDO
+UNDO.
+UNDO
+UNDO.
+UNDO
+UNDO.
+SELECTALL
+SELECTALL.
+REDO
+REDO.
+REDO
+REDO.
+REDO
+REDO.
+*ERROR* document.redo: nothing_to_redo — redo stack is empty
+SELECTALL
+SELECTALL.
+OSNAP modes are configured in the layers palette settings.
