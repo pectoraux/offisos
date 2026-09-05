@@ -12,7 +12,11 @@
  *    columns are the CAS target; SELECT ... FOR UPDATE is the per-document
  *    serialization inside the commit transaction).
  *  - `document_versions` — the append-only version chain (the unique
- *    (entity_id, version_number) + the parent linkage).
+ *    (entity_id, version_number) + the parent linkage; `body_bytes` is
+ *    BIGINT NOT NULL and every stored row is mapped LOCK-007 fail-closed:
+ *    a NULL (legacy/manual corruption bypassing the schema guard), a
+ *    non-integer, or a negative value declines typed `document_corrupt` —
+ *    never a silent 0).
  *  - `document_blobs` — the content-addressed canonical snapshot bodies
  *    (insert-if-absent = idempotent dedup). THE COLUMN TYPE IS `json`,
  *    NOT `jsonb` — the byte-identity contract (see the p016-postgres.ts
@@ -62,6 +66,7 @@
 import { Pool, type PoolClient } from "pg";
 import {
   DocumentStoreError,
+  assertPersistedViewBodiesComplete,
   bodyRefOf,
   idempotencyScope,
   renderPersistedView,
@@ -137,8 +142,11 @@ interface CommandLogRow {
 
 function asInt(value: string | number, field: string): number {
   const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(n)) {
-    throw new DocumentStoreError("document_corrupt", `the stored ${field} is not an integer`);
+  // LOCK-007: the stored domain counters are exact non-negative integers —
+  // anything else (including Number(null) === 0) is typed corruption, never
+  // a guessed value.
+  if (!Number.isInteger(n) || n < 0) {
+    throw new DocumentStoreError("document_corrupt", `the stored ${field} is not a non-negative integer`);
   }
   return n;
 }
@@ -158,6 +166,17 @@ function mapDocumentRow(row: DocumentRow): DocumentRecord {
 }
 
 function mapVersionRow(row: VersionRow): DocumentVersionRecord {
+  // LOCK-007: a NULL body_bytes is stored corruption — the port contract
+  // requires an exact non-negative integer, and converting NULL to 0 would
+  // guess at missing data (reject, never guess). The DDL declares the
+  // column NOT NULL from this revision; this mapper guard keeps the
+  // typed-corruption contract even against a bypassed or legacy schema.
+  if (row.body_bytes === null) {
+    throw new DocumentStoreError(
+      "document_corrupt",
+      `the stored body_bytes for version '${row.version_id}' of document '${row.entity_id}' is NULL — the port contract requires an exact non-negative integer (LOCK-007: reject, never guess)`,
+    );
+  }
   return {
     entity_id: row.entity_id,
     version_id: row.version_id,
@@ -166,7 +185,7 @@ function mapVersionRow(row: VersionRow): DocumentVersionRecord {
     content_hash: row.content_hash,
     model_revision: asInt(row.model_revision, "model_revision"),
     body_ref: row.body_ref,
-    body_bytes: row.body_bytes === null ? 0 : asInt(row.body_bytes, "body_bytes"),
+    body_bytes: asInt(row.body_bytes, "body_bytes"),
     created_by: row.created_by,
   };
 }
@@ -248,7 +267,11 @@ export class PostgresDocumentStore implements DocumentStore {
           content_hash     TEXT NOT NULL,
           model_revision   BIGINT NOT NULL,
           body_ref         TEXT NOT NULL,
-          body_bytes       BIGINT,
+          -- LOCK-007: body_bytes is an exact non-negative integer by the
+          -- port contract; NOT NULL is the schema-level half of the guard
+          -- (the row mapper rejects NULL as typed document_corrupt even
+          -- against a bypassed/legacy schema — never a silent 0).
+          body_bytes       BIGINT NOT NULL,
           created_by       TEXT NOT NULL,
           created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY (entity_id, version_id),
@@ -742,6 +765,11 @@ export class PostgresDocumentStore implements DocumentStore {
           bodies[row.body_ref] = row.content;
         }
       }
+      // LOCK-007 fail-closed: every version's content-addressed body must
+      // be present — a missing referenced blob makes the view incomplete,
+      // which is typed document_corrupt (never a silently omitted body;
+      // fetchBody stays the honest null direct-lookup).
+      assertPersistedViewBodiesComplete(entityId, versions, bodies);
       const idemRes = await client.query<IdempotencyRow>(
         `SELECT scope, idem_key, request_hash, response_binding, applied_version
          FROM idempotency_keys WHERE scope = $1 ORDER BY idem_key ASC`,
