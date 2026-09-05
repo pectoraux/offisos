@@ -328,6 +328,31 @@ export function renderPersistedView(view: PersistedDocumentViewData): string {
   return canonicalJson(view);
 }
 
+/** The LOCK-007 fail-closed body-completeness check for the persisted
+ *  view: every version's content-addressed body_ref must have its blob
+ *  present in the assembled bodies map — a missing referenced blob is
+ *  typed `document_corrupt` (a syntactically valid but incomplete view is
+ *  stored corruption, never a degraded success). The backend assembles
+ *  the bodies map; this shared assertion enforces the contract for every
+ *  backend. (`fetchBody(body_ref) === null` remains the honest answer for
+ *  a direct lookup — the persisted view is the aggregate that must fail
+ *  closed.) */
+export function assertPersistedViewBodiesComplete(
+  entityId: string,
+  versions: readonly DocumentVersionRecord[],
+  bodies: Readonly<Record<string, string>>,
+): void {
+  const missing = [...new Set(versions.map((v) => v.body_ref))].filter(
+    (ref) => !(ref in bodies),
+  );
+  if (missing.length > 0) {
+    throw new DocumentStoreError(
+      "document_corrupt",
+      `the persisted view for document '${entityId}' references ${missing.length} body blob(s) absent from the store: ${missing.join(", ")} — the view would be incomplete (LOCK-007: reject, never guess)`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The LOCK-007 structural validation (reject malformed, never guess).
 // ---------------------------------------------------------------------------
@@ -663,6 +688,10 @@ export class MemoryDocumentStore implements DocumentStore {
       const body = this.bodies.get(v.body_ref);
       if (body !== undefined) bodies[v.body_ref] = body;
     }
+    // LOCK-007 fail-closed: a version whose content-addressed body is
+    // absent from the store is stored corruption — the incomplete view
+    // must never render as a success (reject, never guess).
+    assertPersistedViewBodiesComplete(entityId, versions, bodies);
     const scope = idempotencyScope(entityId);
     const idems = [...this.idempotency.values()]
       .filter((r) => r.scope === scope)
