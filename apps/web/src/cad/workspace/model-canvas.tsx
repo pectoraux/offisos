@@ -959,7 +959,15 @@ export function ModelCanvas(props: ModelCanvasProps): React.JSX.Element {
           // dispatches one `entities` batch to the engine.
           dragRef.current = { kind: "commandSelection", startX: sx, startY: sy, panX: pan.x, panY: pan.y, gripId: "", gripElement: null };
           setSelectionRect({ a: [sx, sy], b: [sx, sy] });
-          e.currentTarget.setPointerCapture(e.pointerId);
+          // Pointer capture is a progressive enhancement (drags leaving the
+          // canvas bounds); synthetic PointerEvents (browser-agent forensics,
+          // test harnesses) carry no active pointer id, where setPointerCapture
+          // throws — guarded so the drag state still records and completes.
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            /* no active pointer — the drag completes on pointerup */
+          }
         }
         return;
       }
