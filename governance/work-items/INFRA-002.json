@@ -95,21 +95,21 @@
       "reason": "The full INFRA-002 diff (seven additive files \u2014 the port, the fixture runner, the pinned fixture, the tests, the postgres adapter, the real-postgres proof script, the CI workflow) is pushed on the work branch and the implementation PR #147 is open against main. Zero existing files modified; check-protected passes against main.",
       "references": {
         "pr": 147,
-        "commit": "d1efe13120b3143850c790d1ceba30e073ec8c3b",
+        "commit": "673dda2fce117cfd334e8026343f932e4a986f7d",
         "issue": 144
       }
     },
     {
       "from": "PR_OPEN",
       "to": "VERIFYING",
-      "at": "2026-09-05T08:41:23Z",
+      "at": "2026-09-05T08:48:01Z",
       "actor": "z-ai-infra-agent",
       "role": "implementer",
-      "reason": "Verification evidence submitted for independent Architect review: the deterministic app suite (1436 tests / 1380 pass / 0 fail / 56 honest skips \u2014 the 1426 pre-existing tests plus the ten new INFRA-002 tests), the web host lint/typecheck/build, the real-PostgreSQL store proof (byte-identity vs the pinned fixture, deterministic concurrent CAS, cross-instance durability), the root governance suite byte-identical to clean main (199/193/6 \u2014 the six failures are the pre-existing CAD-PARITY-020 defect, Architect authority), and check-protected PASS. Implementation-side lifecycle advancement stops here. Revision binding (the final self-consistent anchoring, the INFRA-001 PR #141 accepted pattern): every transition and evidence time is an actual GitHub-recorded event time \u2014 the release transitions at 2026-09-05T07:48:25Z (the Architect's release, preserved), IMPLEMENTING at 2026-09-05T08:36:48Z (the first implementation commit 5ddcb2f04007's committer date), PR_OPEN at 2026-09-05T08:39:26Z (PR #147's created_at), this transition at 2026-09-05T08:41:23Z (commit d1efe13120b3's committer date \u2014 the record-advancement commit, the revision this record and its evidence bind to; the immediately-following correction commit is governance-record-only on this one non-material path, with the implementation byte-identical to that revision). No timestamp is invented or inferred.",
+      "reason": "Verification evidence submitted for independent Architect review: the deterministic app suite (1436 tests / 1380 pass / 0 fail / 56 honest skips \u2014 the 1426 pre-existing tests plus the ten new INFRA-002 tests), the web host lint/typecheck/build, the real-PostgreSQL store proof (byte-identity vs the pinned fixture, deterministic concurrent CAS, cross-instance durability), the root governance suite byte-identical to clean main (199/193/6 \u2014 the six failures are the pre-existing CAD-PARITY-020 defect, Architect authority), and check-protected PASS. Implementation-side lifecycle advancement stops here. Revision binding (the final self-consistent anchoring, the INFRA-001 PR #141 accepted pattern): every transition and evidence time is an actual GitHub-recorded event time \u2014 the release transitions at 2026-09-05T07:48:25Z (the Architect's release, preserved), IMPLEMENTING at 2026-09-05T08:36:48Z (the first implementation commit 5ddcb2f04007's committer date), PR_OPEN at 2026-09-05T08:39:26Z (PR #147's created_at), this transition at 2026-09-05T08:48:01Z (the final implementation revision 673dda2fce11's committer date \u2014 the complete deliverable set including the CI workflow YAML fix, the tree the verification evidence covers). The remediation sequence is fully GitHub-anchored and disclosed: the seven implementation commits (08:36:48\u201308:36:59Z), the PR open (08:39:26Z), the first record advancement R_a (08:41:23Z), the timestamp rebind R_b (08:42:16Z), the CI workflow YAML fix W = the bound revision (08:48:01Z), and this governance-record-only correction commit immediately following (the implementation is byte-identical to 673dda2fce11 except this one non-material record path). No timestamp is invented or inferred.",
       "references": {
         "pr": 147,
         "issue": 144,
-        "commit": "d1efe13120b3143850c790d1ceba30e073ec8c3b",
+        "commit": "673dda2fce117cfd334e8026343f932e4a986f7d",
         "evidence": [
           "EV-001",
           "EV-002",
@@ -123,9 +123,9 @@
       "id": "EV-001",
       "type": "automated-test-suite",
       "description": "The deterministic app suite with the INFRA-002 additions: 1436 tests / 1380 pass / 0 fail / 56 honest skips (the 1426 pre-existing tests unchanged in behavior \u2014 zero existing app files modified \u2014 plus the ten new DocumentStore tests: the port contract, LOCK-007 structural validation, deterministic CAS/idempotency semantics, fail-closed behavior, the audit-seq discipline and the pinned byte-identity fixture against a fresh memory instance). App typecheck (strict) PASS; web host ESLint + tsc --noEmit + next build --webpack PASS (the v1 request path untouched: routes / and /api/cad unchanged). The root governance suite is byte-identical to clean main: 199 tests / 193 pass / 6 fail \u2014 all six failures are the pre-existing CAD-PARITY-020.json missing-dependencies defect (validate.ts:253, documented in PR #133, Architect authority).",
-      "produced_at": "2026-09-05T08:41:23Z",
+      "produced_at": "2026-09-05T08:48:01Z",
       "references": {
-        "commit": "d1efe13120b3143850c790d1ceba30e073ec8c3b",
+        "commit": "673dda2fce117cfd334e8026343f932e4a986f7d",
         "pr": 147
       },
       "reproducible": true,
@@ -134,10 +134,10 @@
     {
       "id": "EV-002",
       "type": "reproducible-script",
-      "description": "The real-PostgreSQL store proof (apps/web/test/infra-002-postgres-store.mjs, run with node --import tsx): the cross-backend byte-identity fixture ON A REAL POSTGRESQL SERVICE (memory view == postgres view == the pinned fixture, byte-identical \u2014 4814/4357 view bytes), the deterministic concurrent-CAS proof (two parallel commits on the same base: exactly one wins, the loser declines with the typed data-carrying document_conflict \u2014 current head + intervening version \u2014 and the audit trail records the decline), and the cross-instance durability proof (a FRESH adapter instance over the same database sees the same head, replays the same idempotency binding, fetches the exact body bytes). Verified locally against a real PostgreSQL instance (PASS, all three proofs) before the push; the CI workflow (.github/workflows/infra-002.yml, the cad-parity-016 precedent) runs the same script against the CI web job's postgres service on the exact PR head.",
-      "produced_at": "2026-09-05T08:41:23Z",
+      "description": "The real-PostgreSQL store proof (apps/web/test/infra-002-postgres-store.mjs, run with node --import tsx): the cross-backend byte-identity fixture ON A REAL POSTGRESQL SERVICE (memory view == postgres view == the pinned fixture, byte-identical \u2014 4814/4357 view bytes), the deterministic concurrent-CAS proof (two parallel commits on the same base: exactly one wins, the loser declines with the typed data-carrying document_conflict \u2014 current head + intervening version \u2014 and the audit trail records the decline), and the cross-instance durability proof (a FRESH adapter instance over the same database sees the same head, replays the same idempotency binding, fetches the exact body bytes). Verified locally against a real PostgreSQL instance (PASS, all three proofs) before the push; the CI workflow (.github/workflows/infra-002.yml, the cad-parity-016 precedent) runs the same script against the CI web job's postgres service on the exact PR head. CI-trigger incident disclosed: the workflow file's first revision had an unquoted colon in the web-host job name \u2014 GitHub marked the head with a failed invalid-workflow suite (a 0-job run, run 33955992699) and the jobs never started; the fix (commit 673dda2fce11) restored the file and the pull_request arm then triggered the real run on the exact PR head (run 33956254691 and its successor on the final head).",
+      "produced_at": "2026-09-05T08:48:01Z",
       "references": {
-        "commit": "d1efe13120b3143850c790d1ceba30e073ec8c3b",
+        "commit": "673dda2fce117cfd334e8026343f932e4a986f7d",
         "pr": 147
       },
       "reproducible": true,
@@ -147,9 +147,9 @@
       "id": "EV-003",
       "type": "inspectable-artifact",
       "description": "The changed-file scope proof and the governance validation: the diff is exactly seven additive files (app/src/persist/documentstore.ts, app/test/infra-002-documentstore-fixture.ts, app/test/fixtures/infra-002-documentstore.json, app/test/infra-002-documentstore.test.ts, apps/web/src/server/documentstore-postgres.ts, apps/web/test/infra-002-postgres-store.mjs, .github/workflows/infra-002.yml) plus this governance record \u2014 zero existing files modified, zero request-path wiring (the stateless-request migration is INFRA-004/005), zero COMPAT-CAD-006/007 overlap. The record is schema-valid against governance/schemas/work-item.schema.json and passes all ten validateWorkItem rule categories on the branch tree; npm run governance -- check-protected --base main PASS (7 paths checked, 0 protected-path violations). The non-goals hold: no R2, no request-shape change, no Redis, no worker service, no production environment wiring.",
-      "produced_at": "2026-09-05T08:41:23Z",
+      "produced_at": "2026-09-05T08:48:01Z",
       "references": {
-        "commit": "d1efe13120b3143850c790d1ceba30e073ec8c3b",
+        "commit": "673dda2fce117cfd334e8026343f932e4a986f7d",
         "path": "app/src/persist/documentstore.ts",
         "pr": 147
       },
