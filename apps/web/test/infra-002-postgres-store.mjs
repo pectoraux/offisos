@@ -5,10 +5,13 @@
  * (memory view == postgres view == the pinned fixture, ON THE REAL
  * SERVICE), the deterministic concurrent-CAS proof (two parallel commits
  * on the same base — exactly one wins, the loser gets the typed
- * data-carrying document_conflict) and the cross-instance durability
- * proof (a FRESH adapter instance over the same database sees the same
- * head and replays the same idempotency binding — the serverless
- * instance-rotation boundary at the store layer).
+ * data-carrying document_conflict), the cross-instance durability proof
+ * (a FRESH adapter instance over the same database sees the same head and
+ * replays the same idempotency binding — the serverless instance-rotation
+ * boundary at the store layer), and the LOCK-007 stored-corruption proofs
+ * (a NULL body_bytes and a missing referenced body blob both decline
+ * typed document_corrupt — reject, never guess; the PR #147 CHANGES
+ * REQUIRED remediation).
  *
  * Usage: node --import tsx apps/web/test/infra-002-postgres-store.mjs
  *   (requires DATABASE_URL; a local postgres; skips honestly when unset —
@@ -38,6 +41,22 @@ if (!isPostgresUrl) {
 
 const assert = (cond, message) => {
   if (!cond) throw new Error(`ASSERTION FAILED: ${message}`);
+};
+
+/** The typed-corruption expectation: fn must REJECT with
+ * DocumentStoreError("document_corrupt") — resolving (a silently degraded
+ * success) is itself the assertion failure. Returns the caught error. */
+const expectDocumentCorrupt = async (fn, label) => {
+  try {
+    await fn();
+  } catch (e) {
+    assert(
+      e instanceof DocumentStoreError && e.code === "document_corrupt",
+      `${label} must decline typed document_corrupt (got ${e?.code ?? e})`,
+    );
+    return e;
+  }
+  throw new Error(`ASSERTION FAILED: ${label} resolved — it must decline typed document_corrupt (LOCK-007: reject, never guess)`);
 };
 
 const { runDocumentStoreFixture } = await import(
@@ -251,10 +270,99 @@ async function main() {
       "(fresh adapter instance: same head, same replay binding, exact body bytes)",
   );
 
+  // --- 5. The LOCK-007 stored-corruption proofs (the PR #147 CHANGES
+  // REQUIRED remediation): both corruption cases are injected with direct
+  // SQL (the public API cannot produce them — by design) and must decline
+  // typed document_corrupt — reject, never guess.
+  const viewCBeforeCorruption = await pg.persistedView(DOC_C);
+
+  // 5a. The body_bytes invariant: the column is BIGINT NOT NULL (the
+  //     database-level guard — a direct NULL insert is rejected by the
+  //     schema itself), and the row mapper additionally declines a NULL
+  //     as typed document_corrupt — never a silent 0 — when the schema
+  //     guard is bypassed (a legacy nullable column or a manual edit).
+  let schemaGuard = null;
+  try {
+    await admin.query(
+      `INSERT INTO document_versions
+         (entity_id, version_id, parent_version_id, version_number, content_hash,
+          model_revision, body_ref, body_bytes, created_by)
+       VALUES ($1, $2, NULL, 99, 'corruption-probe', 1, 'corruption-probe', NULL, 'corruption-probe')`,
+      [DOC_C, `${DOC_C}#corrupt-null-bytes`],
+    );
+  } catch (e) {
+    schemaGuard = e;
+  }
+  assert(
+    schemaGuard !== null && schemaGuard.code === "23502",
+    `the body_bytes NOT NULL schema guard rejects a NULL insert at the database level (got ${schemaGuard?.code ?? schemaGuard})`,
+  );
+  // The mapper-level guard: bypass the schema guard (the legacy-nullable
+  // scenario) and store the NULL directly, then read it back through the
+  // adapter's public read paths.
+  await admin.query("ALTER TABLE document_versions ALTER COLUMN body_bytes DROP NOT NULL");
+  await admin.query(
+    "UPDATE document_versions SET body_bytes = NULL WHERE entity_id = $1 AND version_id = $2",
+    [DOC_C, rootC.version_id],
+  );
+  const nullBytesError = await expectDocumentCorrupt(
+    () => pg.getVersion(DOC_C, rootC.version_id),
+    "getVersion with a stored NULL body_bytes",
+  );
+  assert(
+    String(nullBytesError.message).includes("body_bytes"),
+    "the document_corrupt decline names body_bytes",
+  );
+  await expectDocumentCorrupt(
+    () => pg.persistedView(DOC_C),
+    "persistedView with a stored NULL body_bytes",
+  );
+  // Restore the exact stored value and the NOT NULL guard.
+  await admin.query(
+    "UPDATE document_versions SET body_bytes = $3 WHERE entity_id = $1 AND version_id = $2",
+    [DOC_C, rootC.version_id, rootC.body_bytes],
+  );
+  await admin.query("ALTER TABLE document_versions ALTER COLUMN body_bytes SET NOT NULL");
+
+  // 5b. The missing content-addressed body: fetchBody stays the honest
+  //     direct lookup (null — the Architect-confirmed contract), but
+  //     persistedView must fail closed: a version whose body_ref has no
+  //     blob makes the view incomplete, which is typed document_corrupt —
+  //     never a silently omitted body.
+  await admin.query("DELETE FROM document_blobs WHERE body_ref = $1", [v2c.body_ref]);
+  assert(
+    (await pg.fetchBody(v2c.body_ref)) === null,
+    "fetchBody returns null for a missing blob (the direct-lookup contract)",
+  );
+  const missingBlobError = await expectDocumentCorrupt(
+    () => pg.persistedView(DOC_C),
+    "persistedView with a missing referenced body blob",
+  );
+  assert(
+    String(missingBlobError.message).includes(v2c.body_ref),
+    "the document_corrupt decline names the missing body_ref",
+  );
+  // Restoring the exact body restores the byte-identical view (the
+  // corruption proofs are non-destructive to the durable state).
+  await admin.query(
+    "INSERT INTO document_blobs (body_ref, content) VALUES ($1, $2::json)",
+    [v2c.body_ref, bodyOf(2)],
+  );
+  const viewCAfterRestore = await pg.persistedView(DOC_C);
+  assert(
+    viewCAfterRestore === viewCBeforeCorruption,
+    "the restored view is byte-identical to the pre-corruption view",
+  );
+  console.log(
+    "INFRA-002 LOCK-007 stored-corruption proofs on the REAL postgres service: PASS " +
+      "(NULL body_bytes: NOT NULL schema guard + typed document_corrupt mapper guard, never a silent 0; " +
+      "missing body blob: typed document_corrupt fail-closed persistedView with fetchBody as the honest null lookup; exact restoration)",
+  );
+
   await pg.close();
   await pg2.close();
   await admin.end();
-  console.log("INFRA-002 POSTGRES STORE PROOF: PASS (byte-identity + concurrent CAS + cross-instance durability)");
+  console.log("INFRA-002 POSTGRES STORE PROOF: PASS (byte-identity + concurrent CAS + cross-instance durability + LOCK-007 stored-corruption proofs)");
 }
 
 main().catch((e) => {
