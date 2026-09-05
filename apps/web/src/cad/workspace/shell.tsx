@@ -350,6 +350,10 @@ export function WorkspaceShell(): React.JSX.Element {
       elementCount: elements.length,
       storyCount: stories.length,
       currentSelection,
+      // COMPAT-CAD-007 (Issue #142): the document's live elements — the
+      // deterministic ALL/LAST resolution surface for "Select objects:"
+      // prompts (the SAME snapshot state the Electron context passes).
+      documentElements: elements,
       // CAD-PARITY-004: the layer table (name resolution for -LAYER/CHPROP/
       // LAYON builders — the SAME document state both hosts pass).
       layers: snapshot?.layers ?? [],
@@ -1631,6 +1635,7 @@ export function WorkspaceShell(): React.JSX.Element {
                 onCursor={(world) => setCursor(world)}
                 onPickPoint={(world) => dispatchEngine({ type: "pick", point: world })}
                 onPickEntity={(pick) => dispatchEngine({ type: "entity", entity: pick })}
+                onPickEntities={(picks) => dispatchEngine({ type: "entities", entities: picks })}
                 onPickEntityPoint={(pick, worldPoint) => dispatchEngine({ type: "entityPoint", entity: pick, point: [worldPoint[0], worldPoint[1]] })}
                 onPickMiss={(world) => {
                   // COMPAT-CAD-005: a pick MISS is visible feedback (AutoCAD's

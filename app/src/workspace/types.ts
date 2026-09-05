@@ -31,6 +31,7 @@ import type {
   Camera3DState,
   ConstraintRecord,
   DimStyleRecord,
+  Element,
   LayerRecord,
   LayoutRecord,
   TextStyleRecord,
@@ -284,6 +285,13 @@ export interface CommandContext {
   /** Current editor selection (ids with kinds) — used by MOVE/COPY/ERASE
    *  when the object step is skipped with Enter ("previous"). */
   readonly currentSelection: readonly EntityPick[];
+  /** COMPAT-CAD-007 (Issue #142): the document's live elements in document
+   *  order — the deterministic resolution surface for the select-phase
+   *  keywords (ALL / LAST) at "Select objects:" prompts (DEF-021). Both
+   *  hosts pass the adopted snapshot's elements. Absent/empty on contexts
+   *  that predate the field — the keywords then answer typed outcomes
+   *  instead of approximating (no fabricated selections). */
+  readonly documentElements?: readonly Element[];
   /** CAD-PARITY-004: the document layer table (name resolution for the
    *  -LAYER / CHPROP / LAYERSTATE builders; empty on contexts that predate
    *  the field — every builder treats it as "no resolvable names"). */
@@ -358,6 +366,9 @@ export function defaultCommandContext(overrides?: Partial<CommandContext>): Comm
     storyCount: 0,
     defaults: DEFAULT_COMMAND_DEFAULTS,
     currentSelection: [],
+    // COMPAT-CAD-007 (Issue #142): additive default (empty — legacy contexts
+    // answer typed outcomes for ALL/LAST instead of guessing).
+    documentElements: [],
     layers: [],
     textStyles: [],
     dimStyles: [],

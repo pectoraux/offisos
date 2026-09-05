@@ -171,7 +171,14 @@ function rectContainsPoint(rect: SelectionRectangle, p: Vec2): boolean {
 
 function segmentIntersectsRect(a: Vec2, b: Vec2, rect: SelectionRectangle): boolean {
   if (rectContainsPoint(rect, a) || rectContainsPoint(rect, b)) return true;
-  // Liang–Barsky style clip test.
+  // Liang–Barsky clip test. COMPAT-CAD-007 (Issue #142; DEF-006): the
+  // branch convention is the standard one — a NEGATIVE denominator is an
+  // ENTERING parameter (t0 candidate: reject when it is already past the
+  // leaving bound), a POSITIVE denominator is a LEAVING parameter (t1
+  // candidate: reject when it precedes the entering bound). The previous
+  // inverted convention rejected every through-crossing segment whose BOTH
+  // endpoints were outside the rect (the crossing window could never
+  // capture them — the deterministic-crossing defect this phase fixes).
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
   let t0 = 0;
@@ -187,10 +194,12 @@ function segmentIntersectsRect(a: Vec2, b: Vec2, rect: SelectionRectangle): bool
       if (num < 0) return false;
     } else {
       const t = num / denom;
-      if (denom > 0) {
+      if (denom < 0) {
+        // Entering boundary: t must not pass the leaving bound.
         if (t > t1) return false;
         if (t > t0) t0 = t;
       } else {
+        // Leaving boundary: t must not precede the entering bound.
         if (t < t0) return false;
         if (t < t1) t1 = t;
       }

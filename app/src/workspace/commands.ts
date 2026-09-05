@@ -1021,7 +1021,7 @@ export const WORKSPACE_COMMANDS: readonly WorkspaceCommand[] = [
       {
         id: "target",
         kind: "displacement",
-        prompt: "Specify second point or <use typed displacement>:",
+        prompt: "Specify second point or [Multiple] <use typed displacement>:",
         baseStep: "base",
         options: [
           {
