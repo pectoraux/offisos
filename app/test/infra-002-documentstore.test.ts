@@ -1,11 +1,13 @@
 /**
  * INFRA-002 (Issue #144) — the DocumentStore foundation tests: the port
  * contract (the memory backend + the fail-closed adapter), the LOCK-007
- * structural validation, the deterministic CAS/idempotency semantics, and
- * the cross-backend byte-identity fixture (the memory instance of the
+ * structural validation, the deterministic CAS/idempotency semantics, the
+ * cross-backend byte-identity fixture (the memory instance of the
  * runner — the real-PostgreSQL instance runs in the CI web job,
  * apps/web/test/infra-002-postgres-store.mjs, against the SAME pinned
- * fixture).
+ * fixture), and the LOCK-007 stored-corruption fail-closed contract (a
+ * version whose content-addressed body is absent from the store declines
+ * typed document_corrupt from persistedView — reject, never guess).
  */
 
 import { test } from "node:test";
@@ -332,6 +334,42 @@ test("infra-002: LOCK-007 structural validation — malformed inputs decline typ
   assert.equal(log.length, 1); // only document.create
   const versions = await store.listVersions(DOC_A);
   assert.equal(versions.length, 1);
+});
+
+test("infra-002: persistedView fails closed — a version whose content-addressed body is absent declines typed document_corrupt (LOCK-007: reject, never guess)", async () => {
+  const store = new MemoryDocumentStore();
+  const r = root(DOC_A);
+  await store.createDocument(createInput(DOC_A));
+  const v2 = nextVersion(DOC_A, r, 2);
+  await store.commit(commitInput(DOC_A, r, v2));
+  // The healthy view embeds both referenced bodies (byte-identity baseline).
+  const healthy = await store.persistedView(DOC_A);
+  assert.ok(healthy.includes(r.body_ref));
+  assert.ok(healthy.includes(v2.version.body_ref));
+  // Stored-corruption injection: the public API cannot produce a missing
+  // referenced body (every write stores its body — by design), so the
+  // corruption is injected into the backing body map directly (TypeScript
+  // privacy is compile-time only; the runtime map IS the storage under
+  // test — the same injection the real-postgres proof performs with SQL).
+  const internals = store as unknown as { bodies: Map<string, string> };
+  internals.bodies.delete(v2.version.body_ref);
+  // fetchBody remains the honest direct lookup: null, not an error.
+  assert.equal(await store.fetchBody(v2.version.body_ref), null);
+  // persistedView must NOT silently omit the missing body — the incomplete
+  // view is typed document_corrupt, never a degraded success.
+  await assert.rejects(
+    () => store.persistedView(DOC_A),
+    (e: unknown) => {
+      assert.ok(e instanceof DocumentStoreError, "the fail-closed decline must be typed");
+      assert.equal(e.code, "document_corrupt");
+      assert.ok(e.message.includes(v2.version.body_ref), "the decline names the missing body_ref");
+      return true;
+    },
+  );
+  // The corruption is exact: restoring the body restores the byte-identical view.
+  internals.bodies.set(v2.version.body_ref, v2.body);
+  const restored = await store.persistedView(DOC_A);
+  assert.equal(restored, healthy);
 });
 
 test("infra-002: the derivations — idempotencyScope and bodyRefOf", () => {
