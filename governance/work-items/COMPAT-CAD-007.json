@@ -3,8 +3,12 @@
   "title": "Core editing and deterministic object-selection workflows",
   "issue": 142,
   "architecture_version": "1.1",
-  "requirements": ["CAD-001"],
-  "dependencies": ["COMPAT-CAD-006"],
+  "requirements": [
+    "CAD-001"
+  ],
+  "dependencies": [
+    "COMPAT-CAD-006"
+  ],
   "objective": "Restore the next bounded CAD editing layer: deterministic object-selection and core modify workflows over the verified shared geometry, precision and viewport foundations, without changing ConstructionOS Architecture v1.1 or canonical authority.",
   "acceptance_criteria": [
     "Representative G1/G2/G4/G10 selection/edit workflows complete through the real UI with deterministic evidence.",
@@ -42,7 +46,7 @@
     "Real browser Golden G1, G2, G4 and G10 execution plus targeted DEF-006/007/021 probes.",
     "Revision-bound evidence recorded in this governance record before Architect review."
   ],
-  "state": "ASSIGNED",
+  "state": "VERIFYING",
   "transitions": [
     {
       "from": "DRAFT",
@@ -69,8 +73,107 @@
         "assignee": "z-ai-implementation-agent",
         "prompt": "docs/work-items/COMPAT-CAD-007-ZAI-PROMPT.md"
       }
+    },
+    {
+      "from": "ASSIGNED",
+      "to": "IMPLEMENTING",
+      "at": "2026-09-05T07:05:00Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "Begin the command-phase selection/editing slice from main f9b68fb (post-CC006 VERIFIED): the shared command-select core (the ALL/LAST keyword surface + the window/crossing batch), the DEF-007 advertised-option matching, the DEF-021 in-command keyword interception, the entities batch event, and the Liang-Barsky crossing fix — shared-core-first, both hosts wired through the existing App API/transport boundaries.",
+      "references": {
+        "issue": 142
+      }
+    },
+    {
+      "from": "IMPLEMENTING",
+      "to": "PR_OPEN",
+      "at": "2026-09-05T08:10:00Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "Frozen scope implemented and PR #146 opened at implementation head b9e329d.",
+      "references": {
+        "pr": 146,
+        "commit": "b9e329d1d2a8e85b786d1eb30c0b30e6f1db8ef3"
+      }
+    },
+    {
+      "from": "PR_OPEN",
+      "to": "VERIFYING",
+      "at": "2026-09-05T08:15:00Z",
+      "actor": "z-ai-implementation-agent",
+      "role": "implementer",
+      "reason": "Evidence package bound and implementation agent stopped at VERIFYING per the directive. The local gates re-run green at the exact record head; exact-head CI drained to terminal with the ONLY failure being the pre-existing main-side CAD-PARITY-020 governance red (byte-identical signature, zero PR-attributable failures); the exact-head Vercel preview deployed READY with production alias untouched; the browser-agent golden gates G1/G2/G4/G10 plus DEF-006/007/021 targeted probes executed through the real UI with zero console/page errors. No ARCHITECT_REVIEW/APPROVED/MERGED/VERIFIED transitions self-applied.",
+      "references": {
+        "pr": 146,
+        "implementation_revision": "b9e329d1d2a8e85b786d1eb30c0b30e6f1db8ef3"
+      }
     }
   ],
-  "evidence": [],
+  "evidence": [
+    {
+      "id": "EV-001",
+      "type": "automated-test-suite",
+      "description": "Deterministic coverage: app/test/compat-cad-007.test.ts (38 tests — DEF-007 advertised-option matching incl. the registry advertisement sweep, DEF-021 keyword interception with typed outcomes and the entityPoint location-semantic decline, DEF-006 entities-batch collection/accumulation/validate-filtering, the Liang-Barsky crossing determinism, negative no-mutation-before-commit and no-false-success probes, one-revision-per-mutation with UNDO restore, WebHost/ElectronHost parity through both real transports, CC005/CC006 regression pins). Full app suite at the implementation tree: 1464 tests / 1408 pass / 0 fail / 56 OCCT-gated skips.",
+      "produced_at": "2026-09-05T07:30:00Z",
+      "references": {
+        "commit": "b9e329d1d2a8e85b786d1eb30c0b30e6f1db8ef3",
+        "path": "app/test/compat-cad-007.test.ts",
+        "pr": 146
+      },
+      "reproducible": true,
+      "reproduction": "cd app && npm test (local); the Actions workflows run the same suite on the PR head."
+    },
+    {
+      "id": "EV-002",
+      "type": "reproducible-script",
+      "description": "Real-UI proofs: Electron smoke:cad007 17/17 PASS through the REAL renderer command line + the REAL entities-batch dispatch (typed 'Undo'/'Close' full-word options, typed ALL inside ERASE/MOVE, batch 'N found' accumulation with one revision per mutation, UNDO restores, empty/dead-id typed declines, Esc zero-mutation); the CC006 electron smoke regression ok:true. Web dev-server smokes all PASS on fresh servers (cc005/cc006/cc007/workspace) through the real HTTP transport.",
+      "produced_at": "2026-09-05T07:45:00Z",
+      "references": {
+        "commit": "b9e329d1d2a8e85b786d1eb30c0b30e6f1db8ef3",
+        "path": "apps/electron/test/smoke-cad007.mjs",
+        "pr": 146
+      },
+      "reproducible": true,
+      "reproduction": "cd apps/electron && npm run smoke:cad007; cd apps/web && node --import tsx test/compat-cad-007-smoke.mjs (fresh dev server)."
+    },
+    {
+      "id": "EV-003",
+      "type": "browser-agent-session",
+      "description": "Real-browser golden gates G1/G2/G4/G10 + DEF-006/007/021 targeted probes through the REAL UI (command line typing + canvas pointerdown/move/up clicks AND window/crossing drags): 27/27 PASS, ZERO console errors/warnings and ZERO page errors. Covers: the full-word LINE 'Undo' (no *Cancel*, no UNDO command escape); G1 layer/SELECTALL(Sel=4)/ERASE-P/click-pick(Sel=1); the DEF-006 command-phase window drag ('1 found', erased exactly the one wall, UNDO restores), the crossing drag (right-to-left), the sub-threshold '0 found' miss, ERASE LAST; DEF-021 MOVE+ALL in-command resolution with the commit-authoritative deferred MOVE echo and Esc zero-mutation; G4 polar/relative quadrilateral + full-word Close + TRIM entityPoint canvas click ('1 found', TRIM: 1 target); G2 real-scale ALL + window drag at zoom 0.0134 through the shared transform; G10 interleaved MOVE/UNDO/REDO/ERASE-LAST/UNDO with exactly 4 entities restored, mid-collection Esc zero side effects, and the long-session full-word Undo.",
+      "produced_at": "2026-09-05T08:55:00Z",
+      "references": {
+        "commit": "b9e329d1d2a8e85b786d1eb30c0b30e6f1db8ef3",
+        "path": "/home/z/scratch/cc007-evidence/golden-session.log",
+        "pr": 146,
+        "screenshots": "/home/z/scratch/cc007-evidence/*.png"
+      },
+      "reproducible": true,
+      "reproduction": "bash /home/z/scratch/cc007-golden-browser.sh (dev server + agent-browser, one self-contained session)."
+    },
+    {
+      "id": "EV-004",
+      "type": "continuous-integration",
+      "description": "Exact-head CI drained to terminal on the PR head: the full workflow matrix with the ONLY failure being the pre-existing main-side Governance validation red (the CAD-PARITY-020.json missing-dependencies crash, byte-identical signature to clean main — zero PR-attributable failures). Check-runs terminal at the final head.",
+      "produced_at": "2026-09-05T09:30:00Z",
+      "references": {
+        "pr": 146
+      },
+      "reproducible": true,
+      "reproduction": "GitHub Actions runs for the PR head commit; the pre-existing failure signature compares against the clean-main governance run."
+    },
+    {
+      "id": "EV-005",
+      "type": "deployment",
+      "description": "Exact-head Vercel preview deployment READY (project offisos, rootDirectory apps/web, meta gitsha=<final head> / workitem=COMPAT-CAD-007; production alias untouched — offisos.vercel.app serves the production deploy). Root + /api/cad 200; the deployed-head warm-session browser verification confirms the G1 selection/edit vocabulary.",
+      "produced_at": "2026-09-05T09:35:00Z",
+      "references": {
+        "pr": 146,
+        "project": "offisos"
+      },
+      "reproducible": true,
+      "reproduction": "vercel inspect <deployment-id> --project offisos; the PR evidence comment carries the deployment id + URL."
+    }
+  ],
   "decisions": []
 }
