@@ -32,6 +32,11 @@ import { resolveTypedDistance, resolveTypedPoint } from "./typed-input.js";
 // registry module importing THESE helpers from here would create a TDZ
 // cycle); re-exported below so every existing importer is unchanged.
 import { optionValueKey } from "./prompt-options.js";
+// COMPAT-CAD-007 (Issue #142): the shared command-phase selection core —
+// the ALL/LAST keyword resolution surface. command-select imports selection/
+// precision/annotation modules only (no registry/engine imports), so this
+// import is cycle-free.
+import { lastSelectableElement, selectableElements } from "./command-select.js";
 import type {
   CommandContext,
   CommandPlan,
@@ -96,6 +101,7 @@ export type PromptEvent =
   | { readonly type: "typed"; readonly text: string; readonly cursor?: Vec2 | null }
   | { readonly type: "pick"; readonly point: Vec2 }
   | { readonly type: "entity"; readonly entity: EntityPick }
+  | { readonly type: "entities"; readonly entities: readonly EntityPick[] }
   | { readonly type: "entityPoint"; readonly entity: EntityPick; readonly point: Vec2 }
   | { readonly type: "enter" }
   | { readonly type: "cancel" };
@@ -419,6 +425,23 @@ function completeCommand(
   return { state: next, output: { lines: [...echo, ...plan.echo], prompt: null, commandName: null, plan } };
 }
 
+/** COMPAT-CAD-007 (Issue #142; DEF-007): the bracketed option words of a
+ *  step's prompt — the ADVERTISED option surface the user sees. Every
+ *  `[A/B/C]` segment contributes its `/`-separated tokens ("Undo", "Yes",
+ *  "No", "All", "Extents" …). Pure string parsing; deterministic. */
+export function bracketOptionWords(prompt: string): readonly string[] {
+  const out: string[] = [];
+  const re = /\[([^\][]*)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(prompt)) !== null) {
+    for (const token of m[1]!.split("/")) {
+      const word = token.trim();
+      if (word.length > 0) out.push(word);
+    }
+  }
+  return out;
+}
+
 function applyOptionKeyword(
   state: PromptEngineState,
   cmd: WorkspaceCommand,
@@ -427,7 +450,28 @@ function applyOptionKeyword(
 ): PromptEngineResult | null {
   const step = currentStep(state);
   if (step === null || step.options === undefined) return null;
-  const option = step.options.find((o) => o.keyword.toUpperCase() === keyword.toUpperCase());
+  const typed = keyword.trim().toUpperCase();
+  // 1. Abbreviation: the declared keyword (the existing contract — "U" is
+  //    LINE's Undo, "C" is POLYLINE's Close).
+  let option = step.options.find((o) => o.keyword.toUpperCase() === typed);
+  // 2. COMPAT-CAD-007 (Issue #142; DEF-007): the ADVERTISED full word — the
+  //    typed token equals a bracketed word of this step's prompt and that
+  //    word starts with the option's keyword ("Undo"→U, "Close"→C,
+  //    "Through"→T, "Radius"→R). Advertised options are honored uniformly:
+  //    typing the full word can never cancel the command and start another.
+  //    Most-specific match wins (the longest keyword; ties → declaration
+  //    order), so ZOOM's "Extents" resolves EXTENTS before E.
+  if (option === undefined) {
+    const words = bracketOptionWords(step.prompt);
+    if (words.length > 0) {
+      const candidates = step.options.filter((o) =>
+        words.some((w) => w.toUpperCase() === typed && w.toUpperCase().startsWith(o.keyword.toUpperCase())),
+      );
+      if (candidates.length > 0) {
+        option = candidates.reduce((best, o) => (o.keyword.length > best.keyword.length ? o : best));
+      }
+    }
+  }
   if (option === undefined) return null;
 
   if (cmd.id === "line" && option.keyword === "U") {
@@ -746,6 +790,51 @@ export function applyPromptEvent(
       return collectValue(state, cmd, { kind: "entities", entities: [event.entity] }, [`1 found (${event.entity.id})`], ctx);
     }
 
+    // COMPAT-CAD-007 (Issue #142; DEF-006): a WINDOW/CROSSING batch of
+    // object picks during a command select phase. The host resolves the
+    // drag rectangle through the shared command-select core (the SAME
+    // three-way merge the idle canvas selection runs) and dispatches the
+    // captured objects here; the engine validates each, collects the
+    // accepted set and echoes "N found" (+ cumulative total) — AutoCAD-class
+    // window selection inside "Select objects:". Deterministic: the entity
+    // order is the host's shared-merge order (document order based).
+    case "entities": {
+      if (cmd === null) return { state, output: idleOutput([]) };
+      const step = currentStep(state);
+      if (step === null || step.kind !== "entity") {
+        return { state, output: activeOutput(state, ["This step does not accept an object pick."]) };
+      }
+      const accepted: EntityPick[] = [];
+      let rejected = 0;
+      let firstRejection: string | null = null;
+      if (step.validate !== undefined) {
+        for (const entity of event.entities) {
+          const rejection = step.validate(entity);
+          if (rejection === null) accepted.push(entity);
+          else {
+            rejected += 1;
+            if (firstRejection === null) firstRejection = rejection;
+          }
+        }
+      } else {
+        accepted.push(...event.entities);
+      }
+      if (accepted.length === 0) {
+        // Typed outcome — the collection state is unchanged (no partial
+        // mutation, no fabricated success).
+        const reason = firstRejection !== null ? ` — ${firstRejection}` : " — no objects within the selection window.";
+        return { state, output: activeOutput(state, [`0 found${reason}`]) };
+      }
+      const existing = state.values[step.id];
+      const prior = existing !== undefined && existing.kind === "entities" ? existing.entities : [];
+      const total = prior.length + accepted.length;
+      const echo = [`${accepted.length} found${total > accepted.length ? ` (${total} total)` : ""}`];
+      if (rejected > 0 && firstRejection !== null) {
+        echo.push(`${rejected} rejected — ${firstRejection}`);
+      }
+      return collectValue(state, cmd, { kind: "entities", entities: accepted }, echo, ctx);
+    }
+
     // CAD-PARITY-003: object pick that ALSO records where it was picked —
     // the pick location is semantic for TRIM/EXTEND/FILLET/CHAMFER/BREAK
     // (it selects the piece/corner to operate on).
@@ -789,18 +878,76 @@ export function applyPromptEvent(
       const optioned = applyOptionKeyword(state, cmd, text, ctx);
       if (optioned !== null) return optioned;
 
+      // COMPAT-CAD-007 (Issue #142; DEF-021): selection vocabulary at
+      // "Select objects:" prompts is SELECT-PHASE INPUT, never a command
+      // switch — ALL/LAST/P/PREVIOUS resolve (or fail typed) inside the
+      // running command. The benchmark proved typed "ALL" cancelling MOVE
+      // to run SELECTALL (DEF-021); with DEF-007's full-word matching the
+      // same class of escape could hit advertised option words.
+      const runningStep = currentStep(state);
+      if (runningStep !== null && (runningStep.kind === "entity" || runningStep.kind === "entityPoint")) {
+        const token = text.toUpperCase();
+        if (token === "P" || token === "PREVIOUS" || token === "ALL" || token === "LAST") {
+          if (runningStep.kind === "entityPoint") {
+            // The pick LOCATION is semantic (TRIM/EXTEND/FILLET/…) — a
+            // keyword cannot supply it. Typed outcome, command survives.
+            return {
+              state,
+              output: activeOutput(state, [
+                `'${text}' cannot supply the pick point — pick the object in the canvas (the pick point selects the piece to operate on).`,
+              ]),
+            };
+          }
+          if (token === "P" || token === "PREVIOUS") {
+            if (ctx.currentSelection.length === 0) {
+              return { state, output: activeOutput(state, ["No previous selection — pick objects or type P with a selection active."] ) };
+            }
+            return collectValue(
+              state,
+              cmd,
+              { kind: "entities", entities: [...ctx.currentSelection] },
+              [`${ctx.currentSelection.length} found (previous selection)`],
+              ctx,
+            );
+          }
+          if (token === "ALL") {
+            const selectable = selectableElements(ctx.documentElements ?? [], ctx.layers);
+            if (selectable.length === 0) {
+              return { state, output: activeOutput(state, ["0 found — the document contains no selectable objects (visible, unfrozen, unlocked layers only)."] ) };
+            }
+            return collectValue(
+              state,
+              cmd,
+              { kind: "entities", entities: selectable.map((el) => ({ id: el.id, kind: el.kind, props: el.props as Record<string, unknown> })) },
+              [`${selectable.length} found (all objects)`],
+              ctx,
+            );
+          }
+          const last = lastSelectableElement(ctx.documentElements ?? [], ctx.layers);
+          if (last === null) {
+            return { state, output: activeOutput(state, ["0 found — no object has been created yet (LAST needs at least one selectable object)."] ) };
+          }
+          return collectValue(
+            state,
+            cmd,
+            { kind: "entities", entities: [{ id: last.id, kind: last.kind, props: last.props as Record<string, unknown> }] },
+            [`1 found (LAST: ${last.id})`],
+            ctx,
+          );
+        }
+      }
+
       // A command token typed while a command runs starts the new command
       // (canceling the current one) — except inside text steps, where the
       // token is legitimate input (e.g. a story named "Wall").
       // COMPAT-CAD-006 (Issue #138): the ENTITY-step "P" (previous
-      // selection) convention WINS over the PAN command's P alias — the
-      // shipped selection semantics stay intact; PAN starts by its full
-      // name, or by P whenever no entity/entityPoint step is running.
-      const runningStep = currentStep(state);
+      // selection) convention WINS over the PAN command's P alias; PAN
+      // starts by its full name, or by P whenever no entity/entityPoint
+      // step is running. COMPAT-CAD-007: the select-phase vocabulary
+      // (P/PREVIOUS/ALL/LAST) is fully consumed above — only OTHER tokens
+      // reach the switch.
       if (runningStep !== null && runningStep.kind !== "text") {
-        const prevSelectionToken =
-          (runningStep.kind === "entity" || runningStep.kind === "entityPoint") && text.toUpperCase() === "P";
-        const switchTarget = prevSelectionToken ? null : resolveCommand(text);
+        const switchTarget = resolveCommand(text);
         if (switchTarget !== null) {
           const started = startCommand({ ...IDLE_PROMPT_STATE, lastCommandId: state.lastCommandId }, switchTarget, ctx);
           return { state: started.state, output: { ...started.output, lines: ["*Cancel*", ...started.output.lines] } };
@@ -835,19 +982,15 @@ export function applyPromptEvent(
           return collectValue(state, cmd, { kind: "text", text }, [text], ctx);
         }
         case "entity": {
-          if (text.toUpperCase() === "P") {
-            if (ctx.currentSelection.length === 0) {
-              return { state, output: activeOutput(state, ["No previous selection — pick objects or type P with a selection active."]) };
-            }
-            return collectValue(
-              state,
-              cmd,
-              { kind: "entities", entities: [...ctx.currentSelection] },
-              [`${ctx.currentSelection.length} found (previous selection)`],
-              ctx,
-            );
-          }
-          return { state, output: activeOutput(state, [`'${text}' is not an object — pick in the canvas or type P for the previous selection.`]) };
+          // COMPAT-CAD-007: the select-phase vocabulary (P/PREVIOUS/ALL/
+          // LAST) is consumed by the interception above; anything else
+          // typed here is a typed decline (the command keeps running).
+          return {
+            state,
+            output: activeOutput(state, [
+              `'${text}' is not an object — pick in the canvas, drag a selection window, or type P/ALL/LAST.`,
+            ]),
+          };
         }
         case "entityPoint": {
           // The pick LOCATION is semantic here (TRIM/EXTEND/FILLET/…) — a

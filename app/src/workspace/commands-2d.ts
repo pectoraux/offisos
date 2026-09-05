@@ -419,7 +419,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
       {
         id: "angle",
         kind: "number",
-        prompt: "Specify rotation angle in degrees (CCW), or pick the direction:",
+        prompt: "Specify rotation angle in degrees (CCW), pick the direction, or [Reference]:",
         baseStep: "base",
         options: [
           {
@@ -463,7 +463,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
       {
         id: "factor",
         kind: "number",
-        prompt: "Specify scale factor (positive):",
+        prompt: "Specify scale factor (positive) or [Reference]:",
         options: [
           {
             keyword: "R",
@@ -790,7 +790,7 @@ export const COMMANDS_2D: readonly WorkspaceCommand[] = [
       {
         id: "first",
         kind: "entityPoint",
-        prompt: "Select first object or [Distances]:",
+        prompt: "Select first object or [D1/D2] (chamfer distances):",
         options: [
           {
             keyword: "D1",

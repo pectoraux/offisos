@@ -39,6 +39,10 @@ import type { PromptEngineState } from "@offisos/cad-app-shell/workspace/prompt-
 import { effectiveStep } from "@offisos/cad-app-shell/workspace/prompt-engine";
 import {
   applyPickModifier,
+  // COMPAT-CAD-007 (Issue #142): the shared command-phase selection core —
+  // the command-select window/crossing batch (the SAME merge the idle
+  // selection runs, from ONE module, on both hosts).
+  commandWindowPicks,
   cyclePick,
   gripDrag,
   gripsFor,
@@ -184,6 +188,11 @@ export interface ModelCanvasProps {
   readonly onCursor: (world: Vec2 | null) => void;
   readonly onPickPoint: (world: Vec2) => void;
   readonly onPickEntity: (pick: EntityPick) => void;
+  /** COMPAT-CAD-007 (Issue #142; DEF-006): a WINDOW/CROSSING batch of object
+   *  picks during a command select phase — the drag rectangle captured
+   *  through the shared command-select core (the SAME merge the idle
+   *  selection runs). Dispatched to the engine as one `entities` event. */
+  readonly onPickEntities: (picks: readonly EntityPick[]) => void;
   /** CAD-PARITY-003 entityPoint step: the picked element + the RAW world
    *  pick point (the location is semantic for TRIM/EXTEND/FILLET/…). */
   readonly onPickEntityPoint: (pick: EntityPick, worldPoint: Vec2) => void;
@@ -212,7 +221,7 @@ export interface ModelCanvasProps {
 }
 
 interface DragState {
-  readonly kind: "pan" | "selection" | "grip";
+  readonly kind: "pan" | "selection" | "commandSelection" | "grip";
   readonly startX: number;
   readonly startY: number;
   readonly panX: number;
@@ -941,7 +950,17 @@ export function ModelCanvas(props: ModelCanvasProps): React.JSX.Element {
         const picked = pickEntityAt(world);
         const hit = picked !== null ? (snapshot?.elements ?? []).find((el) => el.id === picked.id) : undefined;
         if (hit !== undefined) props.onPickEntity(toEntityPick(hit));
-        else props.onPickMiss?.(world); // COMPAT-CAD-005: visible "0 found" feedback
+        else {
+          // COMPAT-CAD-007 (Issue #142; DEF-006): a miss during a command
+          // select phase STARTS a window/crossing drag (the benchmark's
+          // "drag-select attempts also fail" probe). A plain click (< 4 px,
+          // the idle threshold) still reports the "0 found" miss on pointer
+          // up; a drag resolves through the shared command-select core and
+          // dispatches one `entities` batch to the engine.
+          dragRef.current = { kind: "commandSelection", startX: sx, startY: sy, panX: pan.x, panY: pan.y, gripId: "", gripElement: null };
+          setSelectionRect({ a: [sx, sy], b: [sx, sy] });
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }
         return;
       }
       // CAD-PARITY-003 entityPoint step: pick the object under the cursor AND
@@ -1004,7 +1023,7 @@ export function ModelCanvas(props: ModelCanvasProps): React.JSX.Element {
       setPan({ x: drag.panX - (sx - drag.startX) / zoom, y: drag.panY + (sy - drag.startY) / zoom });
       return;
     }
-    if (drag !== null && drag.kind === "selection") {
+    if (drag !== null && (drag.kind === "selection" || drag.kind === "commandSelection")) {
       setSelectionRect({ a: [drag.startX, drag.startY], b: [sx, sy] });
       return;
     }
@@ -1041,6 +1060,31 @@ export function ModelCanvas(props: ModelCanvasProps): React.JSX.Element {
     if (drag.kind === "pan") {
       setPanning(false);
       persistView(pan, zoom);
+      return;
+    }
+    if (drag.kind === "commandSelection") {
+      // COMPAT-CAD-007 (Issue #142; DEF-006): the command-phase window/
+      // crossing drag. A sub-threshold release is the plain click miss
+      // (the CC005 "0 found" contract); a real drag resolves through the
+      // SHARED command-select core — the SAME three-way merge the idle
+      // selection below runs — and dispatches one `entities` batch.
+      setSelectionRect(null);
+      const [sx, sy] = pointerScreen(e);
+      const world = toWorld(drag.startX, drag.startY);
+      if (Math.hypot(sx - drag.startX, sy - drag.startY) < 4) {
+        props.onPickMiss?.(world);
+        return;
+      }
+      const a = toWorld(drag.startX, drag.startY);
+      const b = toWorld(sx, sy);
+      const picks = commandWindowPicks(
+        [a[0], a[1]],
+        [b[0], b[1]],
+        visibleEntities,
+        geomEntities,
+        annotationStyleCtx,
+      );
+      props.onPickEntities(picks);
       return;
     }
     if (drag.kind === "selection") {

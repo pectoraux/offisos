@@ -182,7 +182,7 @@ export const COMMANDS_COORDINATION: readonly WorkspaceCommand[] = [
         id: "category",
         kind: "text",
         prompt:
-          "Category [CONcrete/STeel/Masonry/TImber/GLass/INsulation/FINishes/GENeric] <Generic>:",
+          "Category [CONcrete/STL/Masonry/TImber/GLass/INsulation/FINishes/GENeric] <Generic>:",
         defaultValue: "Generic",
         options: CATEGORY_OPTIONS,
       },

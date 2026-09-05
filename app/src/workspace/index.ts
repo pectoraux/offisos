@@ -25,6 +25,7 @@ export {
   describePrompt,
   runCommandScript,
   splitEchoTiming,
+  bracketOptionWords,
   type PromptEngineState,
   type PromptEvent,
   type PromptEngineOutput,
@@ -42,6 +43,16 @@ export {
   type PickModifier,
   type SelectionRectangle,
 } from "./selection.js";
+// COMPAT-CAD-007 (Issue #142): the shared command-phase selection core —
+// the ALL/LAST keyword surface and the window/crossing batch resolution
+// BOTH hosts route their "Select objects:" workflows through.
+export {
+  selectableElements,
+  lastSelectableElement,
+  commandWindowIds,
+  commandWindowPicks,
+  toEntityPicks,
+} from "./command-select.js";
 export {
   gripsFor,
   gripDrag,

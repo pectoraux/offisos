@@ -322,7 +322,7 @@ export const COMMANDS_ANNO: readonly WorkspaceCommand[] = [
       {
         id: "placement",
         kind: "point",
-        prompt: "Specify dimension line location (H/V force, R rotates):",
+        prompt: "Specify dimension line location or [H/V/R] (H/V force the orientation, R rotates):",
         options: [
           { keyword: "H", label: "Horizontal", flag: true },
           { keyword: "V", label: "Vertical", flag: true },

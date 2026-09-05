@@ -99,6 +99,7 @@ const isIfcSmoke = process.argv.includes("--smoke-ifc");
 const isComponentsSmoke = process.argv.includes("--smoke-components");
 const isWorkspaceSmoke = process.argv.includes("--smoke-workspace");
 const isCad006Smoke = process.argv.includes("--smoke-cad006");
+const isCad007Smoke = process.argv.includes("--smoke-cad007");
 
 function createWindow(): BrowserWindow {
   // app.getAppPath() is the directory containing this package's package.json
@@ -963,6 +964,219 @@ async function runCad006Smoke(win: BrowserWindow): Promise<void> {
 }
 
 /**
+ * COMPAT-CAD-007 / Issue #142: the command-phase selection/option smoke —
+ * DEF-006/007/021 driven through the REAL renderer command line
+ * (window.__offisosWorkspace.typedInput — the same dispatch the keyboard
+ * runs) and the REAL entities-batch dispatch path:
+ *   - DEF-007: the advertised full-word options (LINE 'Undo', POLYLINE
+ *     'Close') behave exactly like their abbreviations — no *Cancel*, no
+ *     command switch;
+ *   - DEF-021: 'ALL' at "Select objects:" resolves inside the running
+ *     command (no SELECTALL escape); empty-document ALL answers typed;
+ *   - DEF-006: the entities batch collects with "N found" echoes and ONE
+ *     canonical revision per mutating command; UNDO restores the exact
+ *     prior content.
+ */
+async function runCad007Smoke(win: BrowserWindow): Promise<void> {
+  if (process.env.OFFISOS_SMOKE_VERBOSE) {
+    win.webContents.on("console-message", (_e, _level, message) => {
+      console.log("[renderer]", String(message).slice(0, 500));
+    });
+  }
+  const steps: SmokeStep[] = [];
+  const push = (name: string, ok: boolean, detail: unknown = null): void => {
+    steps.push({ step: name, ok, detail });
+    if (process.env.OFFISOS_SMOKE_VERBOSE) console.log(ok ? `  [PASS] ${name}` : `  [FAIL] ${name}`, detail ?? "");
+  };
+
+  await new Promise<void>((resolve) => {
+    win.webContents.once("did-finish-load", () => resolve());
+  });
+
+  const page = async <T>(js: string): Promise<T> => {
+    const wrapped = (await win.webContents.executeJavaScript(
+      `(${js}).then((r) => ({ __smokeOk: true, r }), (e) => ({ __smokeOk: false, msg: String(e), stack: String((e && e.stack) || "") }))`,
+    )) as { __smokeOk: true; r: T } | { __smokeOk: false; msg: string; stack: string };
+    if (wrapped.__smokeOk !== true) {
+      throw new Error(`renderer call rejected: ${wrapped.msg}\n${wrapped.stack.slice(0, 800)}\nfor script: ${js.slice(0, 200)}`);
+    }
+    return wrapped.r;
+  };
+  const qq = (name: string, payload: unknown) =>
+    page<CommandQueryResponse>(`window.cad.send(${JSON.stringify({ type: "query", name, payload })})`);
+  const driver = async <T>(method: string, ...args: unknown[]): Promise<T> =>
+    page<T>(
+      `(async () => await window.__offisosWorkspace.${method}(${args.map((a) => JSON.stringify(a)).join(",")}))()`,
+    );
+  const type = (text: string) => driver<void>("typedInput", text);
+  type DocState = { elements: { id: string }[]; version: { version_number: number } };
+  const docState = async (): Promise<DocState | null> => {
+    const r = await qq("document.getState", {});
+    return r && r.ok ? (r.value as DocState) : null;
+  };
+  const history = async (): Promise<string[]> => (await driver<{ history: string[] }>("status")).history;
+  const drawLine = async (x1: number, y1: number, x2: number, y2: number): Promise<void> => {
+    await type("LINE");
+    await type(`${x1},${y1}`);
+    await type(`${x2},${y2}`);
+    await type("");
+  };
+
+  // 1. Fresh document + three lines through the REAL command line.
+  await type("NEW");
+  await drawLine(0, 0, 100, 0);
+  await drawLine(0, 10, 100, 10);
+  await drawLine(0, 20, 100, 20);
+  let s = await docState();
+  push("1", !!(s && s.elements.length === 3), s ? `elements=${s.elements.length} version=${s.version.version_number}` : "no state");
+  const ids = (s?.elements ?? []).map((el) => el.id);
+
+  // 2. DEF-007: LINE + typed 'Undo' (FULL WORD) — the option runs, the
+  //    command never cancels, the UNDO command never starts.
+  await type("LINE");
+  await type("0,30");
+  await type("100,30");
+  const beforeUndoSeg = (await docState())?.elements.length ?? -1;
+  await type("Undo");
+  const afterUndoSeg = (await docState())?.elements.length ?? -1;
+  const histUndo = await history();
+  push(
+    "2",
+    histUndo.includes("Undo one segment.") && afterUndoSeg === beforeUndoSeg - 1,
+    `echo=${histUndo.includes("Undo one segment.")} elements ${beforeUndoSeg}→${afterUndoSeg}`,
+  );
+  push(
+    "3",
+    !histUndo.slice(-12).includes("*Cancel*"),
+    `no *Cancel* around the full-word Undo: ${histUndo.slice(-6).join(" | ")}`,
+  );
+  await type("");
+
+  // 4. DEF-007: POLYLINE + typed 'Close' (FULL WORD) closes the polyline.
+  await type("POLYLINE");
+  await type("0,40");
+  await type("100,40");
+  await type("100,80");
+  await type("Close");
+  s = await docState();
+  const closedCount = (s?.elements ?? []).length;
+  push("4", closedCount === 4, `elements after closed POLYLINE=${closedCount}`);
+  const histClose = await history();
+  push("5", histClose.includes("Close."), `Close echo: ${histClose.slice(-3).join(" | ")}`);
+
+  // 6. DEF-021: ERASE + typed 'ALL' resolves INSIDE the command.
+  const versionBeforeErase = (await docState())?.version.version_number ?? -1;
+  await type("ERASE");
+  await type("ALL");
+  const histAll = await history();
+  push(
+    "6",
+    histAll.some((l) => l.includes("4 found (all objects)")),
+    `ALL echo: ${histAll.filter((l) => /found|SELECTALL|\*Cancel\*/.test(l)).slice(-4).join(" | ")}`,
+  );
+  await type("");
+  s = await docState();
+  push(
+    "7",
+    !!(s && s.elements.length === 0 && s.version.version_number === versionBeforeErase + 1),
+    `after ERASE ALL: elements=${s?.elements.length ?? -1} version=${s?.version.version_number ?? -1} (one revision)`,
+  );
+
+  // 8. UNDO restores the exact prior content.
+  await type("UNDO");
+  s = await docState();
+  push("8", !!(s && s.elements.length === 4), `UNDO restored elements=${s?.elements.length ?? -1}`);
+  const restoredIds = (s?.elements ?? []).map((el) => el.id);
+
+  // 9. DEF-006: the entities batch through the REAL dispatch path —
+  //    "N found" echo, accumulation, ONE revision on commit.
+  const versionBeforeBatch = (await docState())?.version.version_number ?? -1;
+  await type("ERASE");
+  await driver<void>("pickEntities", restoredIds.slice(0, 2));
+  const histBatch = await history();
+  push(
+    "9",
+    histBatch.some((l) => /^2 found$/.test(l.trim())),
+    `batch echo: ${histBatch.filter((l) => /found/.test(l)).slice(-3).join(" | ")}`,
+  );
+  // A second batch accumulates: "N found (M total)".
+  await driver<void>("pickEntities", restoredIds.slice(2, 3));
+  const histBatch2 = await history();
+  push(
+    "10",
+    histBatch2.some((l) => /1 found \(3 total\)/.test(l)),
+    `second batch echo: ${histBatch2.filter((l) => /found/.test(l)).slice(-3).join(" | ")}`,
+  );
+  await type("");
+  s = await docState();
+  push(
+    "11",
+    !!(s && s.elements.length === 1 && s.version.version_number === versionBeforeBatch + 1),
+    `after batch ERASE: elements=${s?.elements.length ?? -1} version=${s?.version.version_number ?? -1} (one revision)`,
+  );
+  await type("UNDO");
+  s = await docState();
+  push("12", !!(s && s.elements.length === 4), `UNDO after batch restored elements=${s?.elements.length ?? -1}`);
+
+  // 13. DEF-006 negative: an empty batch answers typed '0 found'.
+  await type("ERASE");
+  await driver<void>("pickEntities", []);
+  const histEmpty = await history();
+  push(
+    "13",
+    histEmpty.some((l) => /0 found — no objects within the selection window/.test(l)),
+    `empty batch echo: ${histEmpty.slice(-2).join(" | ")}`,
+  );
+  // A batch with an id that no longer resolves picks nothing (typed decline).
+  await driver<void>("pickEntities", ["el-999999"]);
+  const histDead = await history();
+  push(
+    "14",
+    histDead.some((l) => /0 found — no objects within the selection window/.test(l)),
+    `dead-id batch echo: ${histDead.slice(-2).join(" | ")}`,
+  );
+  await type("");
+  s = await docState();
+  push("15", !!(s && s.elements.length === 4), `nothing erased by empty/dead batches: elements=${s?.elements.length ?? -1}`);
+
+  // 16. DEF-021 negative: MOVE + ALL on the CURRENT document resolves
+  //     typed (no command escape) — the flow is Esc-cancelled with zero
+  //     document change.
+  const versionBeforeNeg = (await docState())?.version.version_number ?? -1;
+  await type("MOVE");
+  await type("ALL");
+  const histMoveAll = await history();
+  // The command-switch *Cancel* (ERASE → MOVE) is legitimate pre-existing
+  // behavior; the DEF-021 contract is that the typed ALL itself never
+  // cancels — no *Cancel* AFTER MOVE started, and the collection echo lands.
+  const moveStart = histMoveAll.lastIndexOf("MOVE");
+  const cancelAfterMove = histMoveAll.slice(moveStart + 1).includes("*Cancel*");
+  push(
+    "16",
+    histMoveAll.some((l) => l.includes("4 found (all objects)")) && !cancelAfterMove,
+    `MOVE ALL echo: ${histMoveAll.filter((l) => /found|\*Cancel\*/.test(l)).slice(-3).join(" | ")}`,
+  );
+  await driver<void>("pressEscape");
+  s = await docState();
+  push(
+    "17",
+    !!(s && s.elements.length === 4 && s.version.version_number === versionBeforeNeg),
+    `Esc cancelled with zero mutation: elements=${s?.elements.length ?? -1} version=${s?.version.version_number ?? -1}`,
+  );
+
+  const allOk = steps.every((st) => st.ok);
+  writeSmokeOut({
+    ok: allOk,
+    electronVersion: process.versions.electron,
+    nodeVersion: process.versions.node,
+    chromeVersion: process.versions.chrome,
+    steps,
+    contentHash: null,
+    sceneHash: null,
+  });
+}
+
+/**
  * CAD-PARITY-002 / Issue #75: the professional workspace Electron smoke.
  *
  * Drives the REAL renderer UI — the professional command line, prompt
@@ -1198,7 +1412,9 @@ app.whenReady().then(() => {
                       ? runWorkspaceSmoke(win)
                       : isCad006Smoke
                         ? runCad006Smoke(win)
-                        : null;
+                        : isCad007Smoke
+                          ? runCad007Smoke(win)
+                          : null;
   if (smokeRun !== null) {
     smokeRun
       .then(() => {
