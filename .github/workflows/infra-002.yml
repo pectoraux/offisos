@@ -1,0 +1,174 @@
+name: infra-002
+
+on:
+  # INFRA-002: manual dispatch (the P015/P016 precedent — the dispatch arm
+  # runs the SAME jobs on the exact head so the CI evidence is producible
+  # even when the pull_request event pipeline does not deliver).
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "apps/web/**"
+      - ".github/workflows/infra-002.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "apps/web/**"
+      - ".github/workflows/infra-002.yml"
+
+# INFRA-002 (Issue #144, the verified INFRA-001 roadmap): the Neon
+# PostgreSQL foundation — the authoritative transactional document store.
+# The two-job pattern (the cad-parity-016 precedent, scoped to this work
+# item's honest surface):
+#   - the workspace-shell job runs the FULL app suite (the deterministic
+#     INFRA-002 DocumentStore tests: the port contract, the LOCK-007
+#     structural validation, the deterministic CAS/idempotency semantics,
+#     the fail-closed adapter, and the memory instance of the cross-backend
+#     byte-identity fixture against the pinned
+#     app/test/fixtures/infra-002-documentstore.json) — the full suite also
+#     proves the INFRA-002 acceptance "the existing v1 request behavior is
+#     unchanged" on the exact head (this work item touches ZERO existing
+#     app files: the new module is a standalone persist sibling imported
+#     nowhere in the request path).
+#   - the web-host-postgres job runs the REAL PostgreSQL service (the CI
+#     convention: postgres:16-alpine with health checks + DATABASE_URL) and
+#     exercises the Neon adapter through the CI proof script: the
+#     byte-identity fixture ON THE REAL SERVICE (memory == postgres ==
+#     pinned), the deterministic concurrent-CAS proof (two parallel commits
+#     on the same base — exactly one wins, the loser gets the typed
+#     data-carrying document_conflict), and the cross-instance durability
+#     proof (a FRESH adapter instance over the same database: same head,
+#     same idempotency replay, exact body bytes — the serverless
+#     instance-rotation boundary at the store layer). The web host
+#     lint/typecheck/build prove the adapter compiles in the real host.
+#   - no electron job: the honest no-new-electron-surface decision (the
+#     P016 precedent) — INFRA-002 wires nothing into any host (the
+#     stateless-request migration is INFRA-004/005); zero electron files
+#     are in the diff and the existing cad-parity electron jobs continue
+#     to guard that host on every PR.
+#
+# Engine isolation (LOCK-003/018): the port module (app/src/persist/
+# documentstore.ts) is pure engine-free TypeScript inside the LOCK-018
+# scanned core (src/persist is already a scanned directory); the postgres
+# adapter is host wiring (apps/web/src/server, the p016-postgres.ts
+# precedent). No request-path file is touched.
+jobs:
+  workspace-shell:
+    name: Workspace deterministic suite (the pre-existing app suite + the INFRA-002 DocumentStore foundation tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Python (pinned toolchain)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned OCCT engine (cadquery-ocp)
+        run: pip install cadquery-ocp==7.8.1.1.post1
+
+      - name: Install the pinned IFC toolchain (ifcopenshell + IfcTester)
+        run: pip install ifcopenshell==0.8.5 IfcTester==0.8.5 numpy==2.1.3
+
+      - name: Install root toolchain (tsx + typescript + ajv)
+        run: npm install
+
+      - name: Typecheck app shell (incl. the INFRA-002 DocumentStore foundation)
+        run: node_modules/.bin/tsc --noEmit -p app/tsconfig.json
+
+      - name: "Full app test suite (the pre-existing suite + the INFRA-002 DocumentStore tests: port contract, LOCK-007 validation, CAS/idempotency determinism, fail-closed, the pinned byte-identity fixture)"
+        working-directory: app
+        run: node --import tsx --test test/*.test.ts
+
+      - name: Forbidden-import static check (LOCK-018 incl. src/persist — the INFRA-002 foundation joins the scanned core)
+        working-directory: app
+        run: node --import tsx --test test/no-forbidden-imports.test.ts
+
+      - name: IFC worker availability probe (pin check)
+        working-directory: app
+        run: |
+          echo '{"op":"ping"}' | python3 src/adapters/ifc/worker/ifc-worker.py
+          echo '{"op":"ping"}' | python3 src/adapters/ifc/worker/ifc-worker.py | grep -q '"engineVersion":"0.8.5"'
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-002-shell-evidence
+          path: app/src
+          if-no-files-found: warn
+
+  web-host-postgres:
+    name: Web host (the Neon/PostgreSQL adapter on a REAL postgres service: byte-identity + concurrent CAS + cross-instance durability)
+    runs-on: ubuntu-latest
+    # INFRA-002: a REAL PostgreSQL service — the authoritative transactional
+    # store (Architecture v1.1 §6). The proof script selects it through
+    # DATABASE_URL (the wiring-point discipline) and resets the schema
+    # deterministically (TRUNCATE ... RESTART IDENTITY) so the byte-identity
+    # fixture is reproducible run over run.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package.json
+
+      - name: Install root toolchain (tsx for the proof script)
+        run: npm install
+
+      - name: Install Web host deps
+        working-directory: apps/web
+        run: npm install
+
+      - name: Web host lint (ESLint)
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Web host typecheck (tsc --noEmit — incl. the INFRA-002 postgres adapter)
+        working-directory: apps/web
+        run: npx tsc --noEmit
+
+      - name: Web host build (next build --webpack)
+        working-directory: apps/web
+        run: npm run build
+
+      - name: "INFRA-002 store proof on the REAL postgres service (byte-identity vs the pinned fixture + deterministic concurrent CAS + cross-instance durability)"
+        run: node --import tsx apps/web/test/infra-002-postgres-store.mjs
+
+      - name: Upload proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-002-web-evidence
+          path: |
+            app/test/fixtures/infra-002-documentstore.json
+          if-no-files-found: warn
