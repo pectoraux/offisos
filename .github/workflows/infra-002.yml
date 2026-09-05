@@ -108,7 +108,7 @@ jobs:
           if-no-files-found: warn
 
   web-host-postgres:
-    name: Web host (the Neon/PostgreSQL adapter on a REAL postgres service: byte-identity + concurrent CAS + cross-instance durability)
+    name: "Web host (the Neon/PostgreSQL adapter on a REAL postgres service: byte-identity + concurrent CAS + cross-instance durability)"
     runs-on: ubuntu-latest
     # INFRA-002: a REAL PostgreSQL service — the authoritative transactional
     # store (Architecture v1.1 §6). The proof script selects it through
